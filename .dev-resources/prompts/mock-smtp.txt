@@ -1,0 +1,23 @@
+I want to mock a smtp server where i can send and recieve mails.
+
+I want to use aiosmtpd with fastapi rest interface. I don't need any UI. I will use swagger to send and recieve emails.
+There should be no authentication.
+
+Yes I want webhook notifications when an emil arrives. 
+
+I need multiple inboxes. One user one email.
+
+4. Email Sending via API
+
+  Do you need the REST API to send emails (SMTP client functionality)?
+  - A) Yes - API endpoint that sends via external SMTP - I need to send email also or check inbox or reply back
+
+
+ Questions Before Implementation
+
+  1. Should webhook failures be logged/stored for inspection via API? - no. simply log in the server logs
+  2. Do you want a POST /api/inboxes/{email}/send endpoint to send test emails through the mock server itself (loopback)? This would let you test full round-trips via Swagger. - not required
+  3. Should inbox creation be explicit (POST /api/inboxes) or implicit (auto-create on first email)? - implicit (auto-create on first email)
+  4. Any preference on email ID format? UUID vs incrementing integers vs content-hash? - no preference
+
+I also need to see the sequence flow diagram of how fastapi and smtp servers talk to each other
