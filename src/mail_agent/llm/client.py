@@ -1,6 +1,7 @@
 """
-LLM Client - Gemini 2.5 Flash integration via LangChain.
+LLM Client - Multi-provider LLM integration via LangChain.
 
+Supports Google Gemini and Azure OpenAI providers.
 Provides async methods for LLM operations with structured output support.
 """
 
@@ -8,11 +9,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Type, TypeVar
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel
 
-from mail_agent.config import Settings, get_settings
+from mail_agent.config import LLMProvider, Settings, get_settings
 
 
 logger = logging.getLogger(__name__)
@@ -55,9 +58,10 @@ class LLMResponse:
 
 class LLMClient:
     """
-    Async client for Gemini 2.5 Flash via LangChain.
+    Async client for LLM operations via LangChain.
 
-    Supports both free-form text and structured (Pydantic) outputs.
+    Supports multiple providers (Gemini, Azure OpenAI) with
+    both free-form text and structured (Pydantic) outputs.
     """
 
     def __init__(
@@ -71,32 +75,76 @@ class LLMClient:
             settings: Configuration settings. Uses get_settings() if not provided.
 
         Raises:
-            LLMConfigurationError: If API key is not configured.
+            LLMConfigurationError: If required credentials are not configured.
         """
         self._settings = settings or get_settings()
-
-        if not self._settings.gemini_api_key:
-            raise LLMConfigurationError(
-                "MAIL_AGENT_GEMINI_API_KEY environment variable is required. "
-                "Please set it to your Google Gemini API key."
-            )
-
-        self._model_name = self._settings.gemini_model
         self._temperature = self._settings.llm_temperature
         self._max_tokens = self._settings.llm_max_tokens
+        self._provider = self._settings.llm_provider
 
-        # Create the LangChain model
-        self._model = ChatGoogleGenerativeAI(
-            model=self._model_name,
+        # Initialize the appropriate provider
+        self._model: BaseChatModel
+        if self._provider == LLMProvider.GEMINI:
+            self._model, self._model_name = self._init_gemini()
+        elif self._provider == LLMProvider.AZURE_OPENAI:
+            self._model, self._model_name = self._init_azure_openai()
+        else:
+            raise LLMConfigurationError(
+                f"Unknown LLM provider: {self._provider}. "
+                f"Supported providers: {[p.value for p in LLMProvider]}"
+            )
+
+        logger.info(
+            f"LLMClient initialized: provider={self._provider.value}, "
+            f"model={self._model_name}, temperature={self._temperature}, "
+            f"max_tokens={self._max_tokens}"
+        )
+
+    def _init_gemini(self) -> tuple[BaseChatModel, str]:
+        """Initialize Google Gemini model."""
+        if not self._settings.gemini_api_key:
+            raise LLMConfigurationError(
+                "MAIL_AGENT_GEMINI_API_KEY environment variable is required "
+                "when using Gemini provider. Please set it to your Google Gemini API key."
+            )
+
+        model_name = self._settings.gemini_model
+        model = ChatGoogleGenerativeAI(
+            model=model_name,
             google_api_key=self._settings.gemini_api_key,
             temperature=self._temperature,
             max_tokens=self._max_tokens,
         )
+        return model, model_name
 
-        logger.info(
-            f"LLMClient initialized: model={self._model_name}, "
-            f"temperature={self._temperature}, max_tokens={self._max_tokens}"
+    def _init_azure_openai(self) -> tuple[BaseChatModel, str]:
+        """Initialize Azure OpenAI model."""
+        if not self._settings.azure_openai_api_key:
+            raise LLMConfigurationError(
+                "MAIL_AGENT_AZURE_OPENAI_API_KEY environment variable is required "
+                "when using Azure OpenAI provider."
+            )
+        if not self._settings.azure_openai_endpoint:
+            raise LLMConfigurationError(
+                "MAIL_AGENT_AZURE_OPENAI_ENDPOINT environment variable is required "
+                "when using Azure OpenAI provider."
+            )
+        if not self._settings.azure_openai_deployment_name:
+            raise LLMConfigurationError(
+                "MAIL_AGENT_AZURE_OPENAI_DEPLOYMENT_NAME environment variable is required "
+                "when using Azure OpenAI provider."
+            )
+
+        model_name = self._settings.azure_openai_deployment_name
+        model = AzureChatOpenAI(
+            azure_deployment=model_name,
+            azure_endpoint=self._settings.azure_openai_endpoint,
+            api_key=self._settings.azure_openai_api_key,
+            api_version=self._settings.azure_openai_api_version,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
         )
+        return model, model_name
 
     async def generate(
         self,
@@ -246,3 +294,8 @@ class LLMClient:
     def model_name(self) -> str:
         """Get the model name."""
         return self._model_name
+
+    @property
+    def provider(self) -> LLMProvider:
+        """Get the LLM provider."""
+        return self._provider
