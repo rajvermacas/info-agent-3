@@ -1,6 +1,7 @@
 """LangGraph state machine for Mail Agent."""
 
 import logging
+import sqlite3
 from datetime import datetime
 
 from langgraph.graph import START, StateGraph
@@ -151,7 +152,9 @@ def create_agent_graph():
 
     logger.info(f"Creating SQLite checkpointer: {db_path}")
 
-    checkpointer = SqliteSaver(db_path)
+    # Create connection object (required by SqliteSaver)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    checkpointer = SqliteSaver(conn)
 
     # Compile graph with checkpointer
     compiled_graph = graph.compile(checkpointer=checkpointer)

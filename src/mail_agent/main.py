@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from mail_agent.agent.graph import create_agent_graph, initialize_agent_state
-from mail_agent.config import get_settings
+from mail_agent.config import Settings, get_settings
 from mail_agent.webhook.server import WebhookServer
 
 logger = logging.getLogger(__name__)
@@ -121,8 +121,104 @@ async def run_agent(
         raise
 
 
+async def _send_async(
+    instruction: str,
+    skip_webhook: bool,
+    webhook_timeout: int,
+    settings: Settings,
+    webhook_server: WebhookServer,
+) -> None:
+    """Async implementation of send command.
+
+    Args:
+        instruction: User's email request instruction
+        skip_webhook: Whether to skip webhook server
+        webhook_timeout: Webhook server timeout in seconds
+        settings: Application settings
+        webhook_server: WebhookServer instance
+    """
+    logger.info("Starting async send implementation")
+
+    # Register webhook with Mock SMTP
+    if not skip_webhook:
+        console.print(f"[cyan]Registering webhook at {settings.webhook_url}...[/cyan]")
+
+        try:
+            from mail_agent.tools.smtp_client import SMTPClient
+            import httpx
+
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                smtp_client = SMTPClient(settings, http_client)
+                async with smtp_client:
+                    await smtp_client.register_webhook(
+                        url=settings.webhook_url,
+                        inbox_filter=settings.agent_email
+                    )
+            console.print("[green]Webhook registered successfully[/green]")
+
+        except Exception as e:
+            logger.warning(f"Failed to register webhook: {str(e)}")
+            console.print(f"[yellow]Warning: Webhook registration failed: {str(e)}[/yellow]")
+
+    # Run agent with webhook server
+    webhook_task = None
+
+    try:
+        # Start webhook server in background
+        if not skip_webhook:
+            webhook_task = asyncio.create_task(
+                run_webhook_server(webhook_server, webhook_timeout)
+            )
+
+        # Run agent (concurrent with webhook server if not skipped)
+        agent_task = asyncio.create_task(
+            run_agent(instruction, webhook_server)
+        )
+
+        # Wait for agent to complete
+        await agent_task
+
+        # Cancel webhook task if still running
+        if webhook_task and not webhook_task.done():
+            webhook_task.cancel()
+            try:
+                await webhook_task
+            except asyncio.CancelledError:
+                pass
+
+        console.print("[green]Mail Agent finished successfully[/green]")
+
+    except KeyboardInterrupt:
+        logger.info("Mail Agent interrupted by user")
+        console.print("\n[yellow]Interrupted by user[/yellow]")
+
+        # Clean up webhook
+        if webhook_task and not webhook_task.done():
+            webhook_task.cancel()
+            try:
+                await webhook_task
+            except asyncio.CancelledError:
+                pass
+
+        raise
+
+    except Exception as e:
+        logger.error(f"Mail Agent error: {str(e)}")
+        console.print(f"[red]Error: {str(e)}[/red]")
+
+        # Clean up webhook
+        if webhook_task and not webhook_task.done():
+            webhook_task.cancel()
+            try:
+                await webhook_task
+            except asyncio.CancelledError:
+                pass
+
+        raise
+
+
 @app.command()
-async def send(
+def send(
     instruction: str = typer.Argument(
         ...,
         help="Email request instruction (e.g., 'Send email to alice@company.com requesting sales data')"
@@ -186,85 +282,18 @@ async def send(
             webhook_path=settings.webhook_path
         )
 
-        # Register webhook with Mock SMTP
-        if not skip_webhook:
-            console.print(f"[cyan]Registering webhook at {settings.webhook_url}...[/cyan]")
+        # Run async operations
+        asyncio.run(_send_async(
+            instruction=instruction,
+            skip_webhook=skip_webhook,
+            webhook_timeout=webhook_timeout,
+            settings=settings,
+            webhook_server=webhook_server,
+        ))
 
-            try:
-                from mail_agent.tools.smtp_client import SMTPClient
-                import httpx
-
-                async def register_webhook():
-                    async with httpx.AsyncClient(timeout=30.0) as http_client:
-                        smtp_client = SMTPClient(settings, http_client)
-                        async with smtp_client:
-                            await smtp_client.register_webhook(
-                                url=settings.webhook_url,
-                                inbox_filter=settings.agent_email
-                            )
-
-                asyncio.run(register_webhook())
-                console.print("[green]Webhook registered successfully[/green]")
-
-            except Exception as e:
-                logger.warning(f"Failed to register webhook: {str(e)}")
-                console.print(f"[yellow]Warning: Webhook registration failed: {str(e)}[/yellow]")
-
-        # Run agent with webhook server
-        webhook_task = None
-
-        try:
-            # Start webhook server in background
-            if not skip_webhook:
-                webhook_task = asyncio.create_task(
-                    run_webhook_server(webhook_server, webhook_timeout)
-                )
-
-            # Run agent (concurrent with webhook server if not skipped)
-            agent_task = asyncio.create_task(
-                run_agent(instruction, webhook_server)
-            )
-
-            # Wait for agent to complete
-            await agent_task
-
-            # Cancel webhook task if still running
-            if webhook_task and not webhook_task.done():
-                webhook_task.cancel()
-                try:
-                    await webhook_task
-                except asyncio.CancelledError:
-                    pass
-
-            console.print("[green]Mail Agent finished successfully[/green]")
-
-        except KeyboardInterrupt:
-            logger.info("Mail Agent interrupted by user")
-            console.print("\n[yellow]Interrupted by user[/yellow]")
-
-            # Clean up webhook
-            if webhook_task and not webhook_task.done():
-                webhook_task.cancel()
-                try:
-                    await webhook_task
-                except asyncio.CancelledError:
-                    pass
-
-            sys.exit(0)
-
-        except Exception as e:
-            logger.error(f"Mail Agent error: {str(e)}")
-            console.print(f"[red]Error: {str(e)}[/red]")
-
-            # Clean up webhook
-            if webhook_task and not webhook_task.done():
-                webhook_task.cancel()
-                try:
-                    await webhook_task
-                except asyncio.CancelledError:
-                    pass
-
-            sys.exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user[/yellow]")
+        sys.exit(0)
 
     except ValueError as e:
         logger.error(f"Configuration error: {str(e)}")
