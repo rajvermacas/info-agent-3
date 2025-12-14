@@ -258,6 +258,157 @@ Default 10MB limit prevents memory exhaustion. Adjust via `MOCK_SMTP_MAX_ATTACHM
 - Webhook testing and debugging
 - Email UI/UX development
 
+## Mail Agent
+
+An autonomous email agent that uses LangGraph and Google Gemini to:
+1. Parse user instructions to extract POC email addresses and request details
+2. Compose professional emails using LLM
+3. Send emails via Mock SMTP
+4. Wait for and receive POC replies via webhooks
+5. Validate responses against success criteria
+6. Send follow-up emails if needed (up to max attempts)
+7. Generate final summary of results
+
+### Quick Start
+
+```bash
+# Terminal 1: Start Mock SMTP Server
+mock-smtp
+
+# Terminal 2: Run Mail Agent
+MAIL_AGENT_GEMINI_API_KEY=your-api-key \
+mail-agent send "Send email to alice@company.com and bob@company.com requesting Q4 sales data in Excel"
+
+# Terminal 3 (optional): Simulate POC replies
+python scripts/poc_reply_simulator.py info-agent@gmail.com \
+  --from alice@company.com \
+  --rows 10 \
+  --attachment sales_data.csv
+```
+
+### Configuration
+
+Mail Agent configuration via `MAIL_AGENT_` environment variables:
+
+```bash
+# Required
+MAIL_AGENT_GEMINI_API_KEY=sk-xxx-xxx
+
+# Optional
+MAIL_AGENT_MOCK_SMTP_API_URL=http://localhost:8025
+MAIL_AGENT_AGENT_EMAIL=info-agent@gmail.com
+MAIL_AGENT_WEBHOOK_HOST=localhost
+MAIL_AGENT_WEBHOOK_PORT=9000
+MAIL_AGENT_MAX_ATTEMPTS=5
+MAIL_AGENT_WEBHOOK_WAIT_TIMEOUT=300
+MAIL_AGENT_LOG_LEVEL=INFO
+MAIL_AGENT_SQLITE_DB_PATH=./mail_agent_state.db
+```
+
+### Usage
+
+#### Check Health
+
+```bash
+mail-agent health
+```
+
+#### Send Email Request
+
+```bash
+# Single POC
+mail-agent send "Email alice@company.com requesting employee directory"
+
+# Multiple POCs
+mail-agent send "Email alice@company.com and bob@company.com requesting product roadmap"
+
+# With timeout and logging
+mail-agent send "Email poc@company.com asking for data" \
+  --webhook-timeout 600 \
+  --log-level DEBUG
+```
+
+#### POC Reply Simulator
+
+Used to test Mail Agent without real POC responses:
+
+```bash
+# Send single reply
+python scripts/poc_reply_simulator.py info-agent@gmail.com \
+  --from alice@company.com \
+  --subject "Re: Data Request" \
+  --body "Here is the requested data" \
+  --rows 5
+
+# Send multiple replies in sequence
+python scripts/poc_reply_simulator.py info-agent@gmail.com \
+  --count 3 \
+  --delay 2
+```
+
+### Architecture
+
+**LangGraph State Machine:**
+1. `parse_instruction` - Extract POC emails and criteria
+2. `decide_next` - Route to next action
+3. `compose_email` / `compose_followup` - Generate email
+4. `send_email` - Send via Mock SMTP
+5. `wait_for_reply` - Wait for webhook notification
+6. `fetch_email` - Fetch full email with attachments
+7. `extract_content` - Parse CSV/Excel attachments
+8. `validate_response` - LLM validation against criteria
+9. `end` - Generate summary
+
+**Webhook Flow:**
+- Agent registers webhook with Mock SMTP
+- When POC replies arrive at agent inbox, Mock SMTP sends webhook
+- Agent graph processes reply and validates content
+- If valid: success. If invalid: compose follow-up (if attempts left)
+
+**State Persistence:**
+- SQLite checkpointer saves graph state
+- Enables resuming interrupted executions
+- Configurable database path
+
+### Features
+
+- **Multi-turn Conversations** - Automatically sends follow-ups for incomplete responses
+- **LLM-Powered** - Uses Gemini to parse, compose, and validate
+- **Webhook-Based** - Efficient async reply handling
+- **Logging** - Comprehensive debug logging throughout
+- **Error Recovery** - Timeout handling and max attempt limits
+- **Type-Safe** - Full TypedDict state schema
+
+### Development
+
+```bash
+# Run tests
+pytest
+
+# Run with coverage
+pytest --cov=src/mail_agent --cov-report=html
+
+# Run specific test
+pytest tests/test_mail_agent.py -v
+```
+
+### Example Conversation Flow
+
+**User Request:**
+```
+"Email alice@company.com requesting Q4 2024 sales data in Excel format"
+```
+
+**Agent Actions:**
+1. Parses: POCs=[alice@company.com], criteria="Excel with Q4 2024 sales"
+2. Composes: Professional email requesting Excel file
+3. Sends: Via Mock SMTP to alice@company.com
+4. Waits: For webhook with reply from alice@company.com
+5. Fetches: Full email with attachments
+6. Extracts: Parses Excel file
+7. Validates: Checks if data matches Q4 2024 sales criteria
+8. If valid: Success! | If invalid: Composes follow-up (max 5 attempts)
+
 ## License
 
 MIT

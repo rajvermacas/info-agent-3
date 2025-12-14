@@ -31,6 +31,14 @@ dependencies = [
     "pydantic>=2.5.0,<3.0.0",
     "pydantic-settings>=2.1.0,<3.0.0",
     "python-multipart>=0.0.6",
+    # Mail Agent dependencies
+    "langgraph>=0.3.30",
+    "langchain-google-genai>=4.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.1",
+    "openpyxl>=3.1.5",
+    "aiosmtplib>=5.0.0",
+    "typer>=0.15.0",
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +52,7 @@ dev = [
 
 [project.scripts]
 mock-smtp = "mock_smtp.main:main"
+mail-agent = "mail_agent.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -55,6 +64,7 @@ addopts = [
     "-q",
     "--strict-markers",
     "--cov=src/mock_smtp",
+    "--cov=src/mail_agent",
     "--cov-report=term-missing",
     "--cov-report=html",
     "--asyncio-mode=auto",
@@ -64,7 +74,7 @@ pythonpath = ["src"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["src/mock_smtp"]
+source = ["src/mock_smtp", "src/mail_agent"]
 omit = [
     "*/tests/*",
     "*/__pycache__/*",
