@@ -4,3 +4,88 @@ It then sends email to smtp mock server to the point of contact email address.
 When poc(point of contact) person who is in this example raj@gmail.com replies back the mail agent should check if the requested information is as per the requirement or not and in this case it checks if there are 10 rows in the excel file with food recipes.
 
 The food recipe here is just an example, infact it can be any piece of information.
+
+Here is the api contract of the mock smtp server:
+@.dev-resources/contracts/mock-smtp.json
+
+but remember the webhook is only implemented to be used with actual smtp connection via aiosmtpd and not the rest api call.
+---------------------
+
+Q2: Email Polling Strategy
+
+  How should the agent monitor for replies?
+  - (A) Periodic polling of inbox via REST API (default - simpler)
+  - (B) Webhook-based push notification (more complex, already supported by mock SMTP)
+
+  The mock SMTP server supports webhooks for SMTP-received emails. Should we use that?
+  The SMTP received emails webhooks will not work if the mail is send from rest api. It only supports when smtp client was connected to the smtp server and then a mail was sent.
+  but in my scenario I will be sending mail using rest api
+
+ Q6: Timeout Strategy
+
+  How long should the agent wait for a reply?
+    - don't worry about it. It's just a poc
+
+ Q7: State Persistence
+
+  Should agent state survive restarts?
+  - (A) In-memory only (stateless, loses progress on restart)
+  - (B) SQLite/file-based persistence (default for production-ready)
+  - (C) External database (PostgreSQL, Redis)
+
+  For a LangGraph agent, state checkpointing is built-in. Which backend? - Use sqlite
+
+ Questions to Consider for Quality/Experience
+
+  UX Considerations
+
+  1. Progress Visibility: Should the agent provide real-time status updates? (e.g., "Email sent", "Waiting for reply", "Reply received, validating...") - Yes
+  2. Human-in-the-Loop: Should validation failures require human approval before sending follow-up emails, or fully autonomous? - fully autonomous
+  3. Email Composition: Should the agent compose the email body intelligently using the LLM, or use templates? - using LLM
+
+  Multi-POC Support: Can a single instruction target multiple POCs simultaneously?
+    - "Send mail to raj@gmail.com AND priya@gmail.com asking for recipes" - Yes
+
+
+Attachment Handling: Should the agent support sending attachments with the initial request? - Yes
+
+Security: Email content may contain sensitive data. Should we encrypt stored state? - No
+
+Polling vs Webhook: Which approach for reply detection? - Webhook
+Agent Email Address: What should the agent's "from" address be? - info-agent@gmail.com
+ Validation Extensibility: Plugin system for validators, or hardcoded? - The validation should be done using LLM
+
+ Conversation Threading: Single request-response, or multi-turn? - multi-turn
+--------------------------
+
+for the webhook problem:
+create a standalone python script to send email using smtp client that also accepts a command line argument of the excel or csv file.
+
+for now only support 2 types of attachments:
+For attachments, we need extraction:
+  - Excel (.xlsx) → Convert to text/JSON representation
+  - CSV → Raw text (LLM can read directly)
+
+
+ What's the max number of turns before giving up?
+  - Default: 5 turns?
+
+ Q12: Outbound Attachment Support
+
+  You want to send attachments with the initial request.
+
+  Example: "Send mail to raj@gmail.com with the template.xlsx asking them to fill it"
+
+  Where do attachments come from?
+   - This requirement is not needed anymore. ONly the point of contact will share an Attachment.
+
+  Q13: Agent "From" Address Inbox
+
+  The agent sends from info-agent@gmail.com.
+
+  Should replies go to the same inbox?
+  - Agent sends from: info-agent@gmail.com
+  - POC replies to: info-agent@gmail.com
+  - Agent monitors inbox: info-agent@gmail.com
+
+  Correct
