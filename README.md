@@ -269,3 +269,7 @@ Contributions welcome! Please ensure:
 - Code follows project structure guidelines
 - Files stay under 800 lines
 - Comprehensive logging is maintained
+
+# Execution steps:
+uv run mock-smtp
+uv run mail-agent run "send mail to raj@gmail.com asking 10 animals in excel file"

@@ -116,9 +116,9 @@ def create_send_router(inbox_store: InboxStore) -> APIRouter:
 
         return {
             "message": "Email sent successfully",
-            "email_id": str(email.id),
-            "from": email.from_address,
-            "to": email.to_addresses,
+            "id": str(email.id),
+            "from_address": email.from_address,
+            "to_addresses": email.to_addresses,
             "subject": email.subject,
             "received_at": email.received_at.isoformat()
         }

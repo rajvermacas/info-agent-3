@@ -3,16 +3,16 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mock-smtp-server"
+name = "info-agent"
 version = "0.1.0"
-description = "A mock SMTP server for testing with REST API and webhook support"
+description = "Mock SMTP server and Mail Agent for autonomous email interactions"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "Development Team", email = "dev@example.com"}
 ]
-keywords = ["smtp", "mock", "testing", "email", "fastapi"]
+keywords = ["smtp", "mock", "testing", "email", "fastapi", "langgraph", "agent"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -24,6 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
+    # Mock SMTP Server
     "aiosmtpd>=1.4.4,<2.0.0",
     "fastapi>=0.109.0,<1.0.0",
     "uvicorn[standard]>=0.27.0,<1.0.0",
@@ -31,6 +32,13 @@ dependencies = [
     "pydantic>=2.5.0,<3.0.0",
     "pydantic-settings>=2.1.0,<3.0.0",
     "python-multipart>=0.0.6",
+    # Mail Agent
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=1.0.0",
+    "langchain-google-genai>=2.0.0",
+    "openpyxl>=3.1.0",
+    "typer>=0.12.0",
+    "aiosmtplib>=3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +52,7 @@ dev = [
 
 [project.scripts]
 mock-smtp = "mock_smtp.main:main"
+mail-agent = "mail_agent.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
