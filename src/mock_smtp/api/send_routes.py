@@ -11,8 +11,6 @@ from mock_smtp.store.models import Email
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
-
 
 class SendEmailRequest(BaseModel):
     """Request model for sending an email."""
@@ -51,6 +49,8 @@ def create_send_router(inbox_store: InboxStore) -> APIRouter:
     Returns:
         Configured APIRouter
     """
+    # Create fresh router each time to avoid closure issues with reused singletons
+    router = APIRouter()
 
     @router.post(
         "/send",

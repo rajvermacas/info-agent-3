@@ -10,8 +10,6 @@ from mock_smtp.store.models import EmailSummary, Inbox, InboxSummary
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
-
 
 def create_inbox_router(inbox_store: InboxStore) -> APIRouter:
     """
@@ -23,6 +21,8 @@ def create_inbox_router(inbox_store: InboxStore) -> APIRouter:
     Returns:
         Configured APIRouter
     """
+    # Create fresh router each time to avoid closure issues with reused singletons
+    router = APIRouter()
 
     @router.get(
         "/inboxes",
