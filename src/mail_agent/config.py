@@ -6,14 +6,22 @@ All settings can be overridden with MAIL_AGENT_ prefix.
 """
 
 import logging
+from enum import Enum
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 logger = logging.getLogger(__name__)
+
+
+class LLMProvider(str, Enum):
+    """Supported LLM providers."""
+
+    GEMINI = "gemini"
+    AZURE_OPENAI = "azure-openai"
 
 
 class Settings(BaseSettings):
@@ -71,14 +79,40 @@ class Settings(BaseSettings):
     )
 
     # LLM Configuration
+    llm_provider: LLMProvider = Field(
+        default=LLMProvider.GEMINI,
+        description="LLM provider to use: 'gemini' or 'azure-openai'",
+    )
+
+    # Google Gemini Configuration
     gemini_api_key: Optional[str] = Field(
         default=None,
-        description="Google Gemini API key (required)",
+        description="Google Gemini API key (required when llm_provider=gemini)",
     )
     gemini_model: str = Field(
         default="gemini-2.5-flash",
         description="Gemini model to use",
     )
+
+    # Azure OpenAI Configuration
+    azure_openai_api_key: Optional[str] = Field(
+        default=None,
+        description="Azure OpenAI API key (required when llm_provider=azure-openai)",
+    )
+    azure_openai_endpoint: Optional[str] = Field(
+        default=None,
+        description="Azure OpenAI endpoint URL (e.g., https://your-resource.openai.azure.com/)",
+    )
+    azure_openai_deployment_name: Optional[str] = Field(
+        default=None,
+        description="Azure OpenAI deployment name",
+    )
+    azure_openai_api_version: str = Field(
+        default="2024-02-15-preview",
+        description="Azure OpenAI API version",
+    )
+
+    # Common LLM Settings
     llm_temperature: float = Field(
         default=0.0,
         ge=0.0,
@@ -130,16 +164,29 @@ class Settings(BaseSettings):
             )
         return upper_v
 
-    @field_validator("gemini_api_key")
-    @classmethod
-    def validate_gemini_api_key(cls, v: Optional[str]) -> Optional[str]:
-        """Warn if API key is not set."""
-        if v is None:
-            logger.warning(
-                "MAIL_AGENT_GEMINI_API_KEY not set. "
-                "LLM operations will fail until configured."
-            )
-        return v
+    @model_validator(mode="after")
+    def validate_llm_provider_config(self) -> "Settings":
+        """Validate that required fields are set for the selected LLM provider."""
+        if self.llm_provider == LLMProvider.GEMINI:
+            if not self.gemini_api_key:
+                logger.warning(
+                    "MAIL_AGENT_GEMINI_API_KEY not set. "
+                    "LLM operations will fail until configured."
+                )
+        elif self.llm_provider == LLMProvider.AZURE_OPENAI:
+            missing = []
+            if not self.azure_openai_api_key:
+                missing.append("MAIL_AGENT_AZURE_OPENAI_API_KEY")
+            if not self.azure_openai_endpoint:
+                missing.append("MAIL_AGENT_AZURE_OPENAI_ENDPOINT")
+            if not self.azure_openai_deployment_name:
+                missing.append("MAIL_AGENT_AZURE_OPENAI_DEPLOYMENT_NAME")
+            if missing:
+                logger.warning(
+                    f"Azure OpenAI configuration incomplete. Missing: {', '.join(missing)}. "
+                    "LLM operations will fail until configured."
+                )
+        return self
 
     @property
     def webhook_url(self) -> str:

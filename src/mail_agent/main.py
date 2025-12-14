@@ -12,7 +12,7 @@ from typing import Optional
 
 import typer
 
-from mail_agent.config import configure_logging, get_settings
+from mail_agent.config import LLMProvider, configure_logging, get_settings
 from mail_agent.agent.state import create_initial_state
 from mail_agent.agent.graph import compile_mail_agent_graph
 from mail_agent.agent.nodes.wait_for_reply import set_webhook_server
@@ -254,10 +254,22 @@ def config() -> None:
     print(f"Mock SMTP Port: {settings.mock_smtp_port}")
     print(f"Agent Email: {settings.agent_email}")
     print(f"Webhook URL: {settings.webhook_url}")
-    print(f"Gemini Model: {settings.gemini_model}")
     print(f"Max Attempts: {settings.max_attempts}")
     print(f"Log Level: {settings.log_level}")
-    print(f"API Key Set: {'Yes' if settings.gemini_api_key else 'No'}")
+    print()
+    print("LLM Configuration")
+    print("-" * 40)
+    print(f"Provider: {settings.llm_provider.value}")
+    if settings.llm_provider == LLMProvider.GEMINI:
+        print(f"Model: {settings.gemini_model}")
+        print(f"API Key Set: {'Yes' if settings.gemini_api_key else 'No'}")
+    elif settings.llm_provider == LLMProvider.AZURE_OPENAI:
+        print(f"Deployment: {settings.azure_openai_deployment_name or 'Not set'}")
+        print(f"Endpoint: {settings.azure_openai_endpoint or 'Not set'}")
+        print(f"API Version: {settings.azure_openai_api_version}")
+        print(f"API Key Set: {'Yes' if settings.azure_openai_api_key else 'No'}")
+    print(f"Temperature: {settings.llm_temperature}")
+    print(f"Max Tokens: {settings.llm_max_tokens}")
 
 
 def main() -> None:
