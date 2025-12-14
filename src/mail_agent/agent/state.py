@@ -245,6 +245,21 @@ class AgentState(TypedDict, total=False):
     _composed_subject: Optional[str]
     _composed_body: Optional[str]
 
+    # Temporary: fetch_email -> extract_content
+    _fetched_email_id: Optional[str]
+    _fetched_attachments: Optional[list[dict[str, Any]]]
+    _fetched_body_text: Optional[str]
+
+    # Temporary: extract_content -> validate_response
+    _extracted_content: Optional[str]
+    _extracted_headers: Optional[list[str]]
+    _extracted_row_count: Optional[int]
+
+    # Temporary: validate_response -> decide_next
+    _validation_is_valid: Optional[bool]
+    _validation_feedback: Optional[str]
+    _validation_missing_items: Optional[list[str]]
+
 
 # ============================================================================
 # State Helper Functions
