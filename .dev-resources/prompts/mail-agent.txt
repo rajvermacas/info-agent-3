@@ -1,0 +1,6 @@
+Create a langgraph agent with LLM support gemini-2.5-flash. 
+This agent should take an instruction input from the end user like `send mail to raj@gmail.com asking 10 food recipes in excel file`.
+It then sends email to smtp mock server to the point of contact email address.
+When poc(point of contact) person who is in this example raj@gmail.com replies back the mail agent should check if the requested information is as per the requirement or not and in this case it checks if there are 10 rows in the excel file with food recipes.
+
+The food recipe here is just an example, infact it can be any piece of information.

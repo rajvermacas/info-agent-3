@@ -483,23 +483,25 @@ Send an email (stores directly in recipient inbox).
 ```json
 // Request
 {
-  "from_email": "alice@test",
-  "to": ["bob@test"],
-  "cc": [],
+  "from_address": "alice@test",
+  "to_addresses": ["bob@test"],
   "subject": "Hello Bob",
   "body_text": "Hi Bob, how are you?",
-  "body_html": "<p>Hi Bob!</p>",
-  "attachments": []
+  "body_html": "<p>Hi Bob!</p>"
 }
 
 // Response 201
 {
   "id": "uuid-123",
-  "from": "alice@test",
-  "to": ["bob@test"],
+  "from_address": "alice@test",
+  "to_addresses": ["bob@test"],
   "subject": "Hello Bob",
-  "stored_in_inboxes": ["bob@test"],
-  "created_at": "2025-01-15T10:30:00Z"
+  "body_text": "Hi Bob, how are you?",
+  "body_html": "<p>Hi Bob!</p>",
+  "attachments": [],
+  "headers": {},
+  "received_at": "2025-01-15T10:30:00Z",
+  "raw_content": null
 }
 ```
 
@@ -537,26 +539,18 @@ When an email arrives, POST to registered webhooks:
 ```json
 {
   "event": "email.received",
-  "timestamp": "2025-01-15T11:45:00Z",
-  "email": {
-    "id": "uuid-1234",
-    "inbox": "user1@localhost",
-    "from": "sender@example.com",
-    "to": ["user1@localhost"],
-    "subject": "Test Email",
-    "body_text": "Plain text...",
-    "body_html": "<html>...</html>",
-    "attachments": [
-      {
-        "filename": "doc.pdf",
-        "content_type": "application/pdf",
-        "size_bytes": 1024,
-        "content_base64": "base64-encoded-content"
-      }
-    ]
-  }
+  "email_id": "uuid-1234",
+  "from": "sender@example.com",
+  "to": ["user1@localhost"],
+  "subject": "Test Email",
+  "has_attachments": true,
+  "attachment_count": 1,
+  "received_at": "2025-01-15T11:45:00.000000",
+  "body_preview": "Plain text content preview (first 100 chars)..."
 }
 ```
+
+**Note:** The webhook payload is intentionally lightweight (no full body or attachments). Webhook receivers should use the `email_id` to fetch full email details via `GET /api/inboxes/{email}/emails/{email_id}` if needed.
 
 ### Server Management
 
@@ -650,14 +644,15 @@ FUNCTION send_email(request: SendRequest) -> SendResponse:
 ### Environment Variables
 
 ```
-MOCK_SMTP_SMTP_HOST=0.0.0.0
+MOCK_SMTP_SMTP_HOST=localhost
 MOCK_SMTP_SMTP_PORT=1025
 MOCK_SMTP_API_HOST=0.0.0.0
 MOCK_SMTP_API_PORT=8025
 MOCK_SMTP_LOG_LEVEL=INFO
-MOCK_SMTP_MAX_EMAILS_PER_INBOX=100
-MOCK_SMTP_MAX_ATTACHMENT_SIZE_MB=25
-MOCK_SMTP_WEBHOOK_TIMEOUT_SECONDS=10
+MOCK_SMTP_MAX_EMAILS_PER_INBOX=1000
+MOCK_SMTP_MAX_ATTACHMENT_SIZE_MB=10
+MOCK_SMTP_WEBHOOK_TIMEOUT_SECONDS=10.0
+MOCK_SMTP_WEBHOOK_MAX_RETRIES=3
 ```
 
 ---

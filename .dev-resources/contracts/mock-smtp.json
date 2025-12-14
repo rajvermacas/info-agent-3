@@ -1,0 +1,876 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "Mock SMTP Server",
+        "description": "A mock SMTP server for testing with REST API and webhook support. Accepts emails via SMTP and provides a REST API for inspection.",
+        "version": "0.1.0"
+    },
+    "paths": {
+        "/api/inboxes": {
+            "get": {
+                "tags": [
+                    "Inboxes"
+                ],
+                "summary": "List all inboxes",
+                "description": "Get summary information for all inboxes",
+                "operationId": "list_inboxes_api_inboxes_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/InboxSummary"
+                                    },
+                                    "type": "array",
+                                    "title": "Response List Inboxes Api Inboxes Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/inboxes/{email_address}": {
+            "get": {
+                "tags": [
+                    "Inboxes"
+                ],
+                "summary": "Get emails for an inbox",
+                "description": "Get all emails in a specific inbox",
+                "operationId": "get_inbox_emails_api_inboxes__email_address__get",
+                "parameters": [
+                    {
+                        "name": "email_address",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Email Address"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/EmailSummary"
+                                    },
+                                    "title": "Response Get Inbox Emails Api Inboxes  Email Address  Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "Inboxes"
+                ],
+                "summary": "Clear an inbox",
+                "description": "Delete all emails from a specific inbox",
+                "operationId": "clear_inbox_api_inboxes__email_address__delete",
+                "parameters": [
+                    {
+                        "name": "email_address",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Email Address"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/inboxes/{email_address}/emails/{email_id}": {
+            "get": {
+                "tags": [
+                    "Emails"
+                ],
+                "summary": "Get a specific email",
+                "description": "Get complete details of a specific email",
+                "operationId": "get_email_api_inboxes__email_address__emails__email_id__get",
+                "parameters": [
+                    {
+                        "name": "email_address",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Email Address"
+                        }
+                    },
+                    {
+                        "name": "email_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Email Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/Email"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "Emails"
+                ],
+                "summary": "Delete an email",
+                "description": "Delete a specific email from an inbox",
+                "operationId": "delete_email_api_inboxes__email_address__emails__email_id__delete",
+                "parameters": [
+                    {
+                        "name": "email_address",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "title": "Email Address"
+                        }
+                    },
+                    {
+                        "name": "email_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Email Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/clear": {
+            "delete": {
+                "tags": [
+                    "Emails"
+                ],
+                "summary": "Clear all inboxes",
+                "description": "Delete all emails from all inboxes (reset server)",
+                "operationId": "clear_all_api_clear_delete",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/send": {
+            "post": {
+                "tags": [
+                    "Send"
+                ],
+                "summary": "Send an email",
+                "description": "Send an email directly to inbox(es) without using SMTP",
+                "operationId": "send_email_api_send_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SendEmailRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/webhooks": {
+            "get": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "summary": "List webhooks",
+                "description": "Get all registered webhooks",
+                "operationId": "list_webhooks_api_webhooks_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/WebhookRegistration"
+                                    },
+                                    "type": "array",
+                                    "title": "Response List Webhooks Api Webhooks Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "summary": "Register a webhook",
+                "description": "Register a new webhook to receive email notifications",
+                "operationId": "register_webhook_api_webhooks_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/WebhookCreateRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WebhookRegistration"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/webhooks/{webhook_id}": {
+            "get": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "summary": "Get a webhook",
+                "description": "Get details of a specific webhook",
+                "operationId": "get_webhook_api_webhooks__webhook_id__get",
+                "parameters": [
+                    {
+                        "name": "webhook_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Webhook Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/WebhookRegistration"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "Webhooks"
+                ],
+                "summary": "Unregister a webhook",
+                "description": "Remove a registered webhook",
+                "operationId": "unregister_webhook_api_webhooks__webhook_id__delete",
+                "parameters": [
+                    {
+                        "name": "webhook_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Webhook Id"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/health": {
+            "get": {
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Health check",
+                "description": "Check if the server is running",
+                "operationId": "health_check_api_health_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/": {
+            "get": {
+                "tags": [
+                    "Root"
+                ],
+                "summary": "Root",
+                "description": "Root endpoint with service information.",
+                "operationId": "root__get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Attachment": {
+                "properties": {
+                    "filename": {
+                        "type": "string",
+                        "minLength": 1,
+                        "title": "Filename",
+                        "description": "Original filename of the attachment"
+                    },
+                    "content_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "title": "Content Type",
+                        "description": "MIME content type (e.g., 'image/png')"
+                    },
+                    "content_base64": {
+                        "type": "string",
+                        "minLength": 1,
+                        "title": "Content Base64",
+                        "description": "Base64-encoded attachment content"
+                    },
+                    "size_bytes": {
+                        "type": "integer",
+                        "minimum": 0.0,
+                        "title": "Size Bytes",
+                        "description": "Size of the attachment in bytes"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "filename",
+                    "content_type",
+                    "content_base64",
+                    "size_bytes"
+                ],
+                "title": "Attachment",
+                "description": "Email attachment model.\n\nStores attachment metadata and content in base64 encoding."
+            },
+            "Email": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id",
+                        "description": "Unique identifier for the email"
+                    },
+                    "from_address": {
+                        "type": "string",
+                        "minLength": 1,
+                        "title": "From Address",
+                        "description": "Sender email address"
+                    },
+                    "to_addresses": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "minItems": 1,
+                        "title": "To Addresses",
+                        "description": "List of recipient email addresses"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "title": "Subject",
+                        "description": "Email subject line",
+                        "default": ""
+                    },
+                    "body_text": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Body Text",
+                        "description": "Plain text body content"
+                    },
+                    "body_html": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Body Html",
+                        "description": "HTML body content"
+                    },
+                    "attachments": {
+                        "items": {
+                            "$ref": "#/components/schemas/Attachment"
+                        },
+                        "type": "array",
+                        "title": "Attachments",
+                        "description": "List of email attachments"
+                    },
+                    "headers": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "type": "object",
+                        "title": "Headers",
+                        "description": "Additional email headers"
+                    },
+                    "received_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Received At",
+                        "description": "Timestamp when email was received"
+                    },
+                    "raw_content": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Raw Content",
+                        "description": "Raw email content (RFC 5322 format)"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "from_address",
+                    "to_addresses"
+                ],
+                "title": "Email",
+                "description": "Email message model.\n\nRepresents a complete email with headers, body, and attachments."
+            },
+            "EmailSummary": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id",
+                        "description": "Unique identifier for the email"
+                    },
+                    "from_address": {
+                        "type": "string",
+                        "title": "From Address",
+                        "description": "Sender email address"
+                    },
+                    "to_addresses": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "title": "To Addresses",
+                        "description": "List of recipient email addresses"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "title": "Subject",
+                        "description": "Email subject line"
+                    },
+                    "has_attachments": {
+                        "type": "boolean",
+                        "title": "Has Attachments",
+                        "description": "Whether email has attachments"
+                    },
+                    "received_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Received At",
+                        "description": "Timestamp when email was received"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "from_address",
+                    "to_addresses",
+                    "subject",
+                    "has_attachments",
+                    "received_at"
+                ],
+                "title": "EmailSummary",
+                "description": "Summary information about an email.\n\nUsed for API list responses to avoid returning full email content."
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "InboxSummary": {
+                "properties": {
+                    "email_address": {
+                        "type": "string",
+                        "title": "Email Address",
+                        "description": "Email address for this inbox"
+                    },
+                    "email_count": {
+                        "type": "integer",
+                        "minimum": 0.0,
+                        "title": "Email Count",
+                        "description": "Number of emails in this inbox"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At",
+                        "description": "Timestamp when inbox was created"
+                    },
+                    "last_email_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Email At",
+                        "description": "Timestamp of the most recent email"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "email_address",
+                    "email_count",
+                    "created_at"
+                ],
+                "title": "InboxSummary",
+                "description": "Summary information about an inbox.\n\nUsed for API responses that don't need full email content."
+            },
+            "SendEmailRequest": {
+                "properties": {
+                    "from_address": {
+                        "type": "string",
+                        "minLength": 1,
+                        "title": "From Address",
+                        "description": "Sender email address"
+                    },
+                    "to_addresses": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array",
+                        "minItems": 1,
+                        "title": "To Addresses",
+                        "description": "List of recipient email addresses"
+                    },
+                    "subject": {
+                        "type": "string",
+                        "title": "Subject",
+                        "description": "Email subject line",
+                        "default": ""
+                    },
+                    "body_text": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Body Text",
+                        "description": "Plain text body content"
+                    },
+                    "body_html": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Body Html",
+                        "description": "HTML body content"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "from_address",
+                    "to_addresses"
+                ],
+                "title": "SendEmailRequest",
+                "description": "Request model for sending an email."
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            },
+            "WebhookCreateRequest": {
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "maxLength": 2083,
+                        "minLength": 1,
+                        "format": "uri",
+                        "title": "Url",
+                        "description": "Webhook URL to POST to"
+                    },
+                    "inbox_filter": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Inbox Filter",
+                        "description": "Optional inbox email address to filter notifications"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "url"
+                ],
+                "title": "WebhookCreateRequest",
+                "description": "Request model for creating a webhook."
+            },
+            "WebhookRegistration": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id",
+                        "description": "Unique identifier for this webhook"
+                    },
+                    "url": {
+                        "type": "string",
+                        "maxLength": 2083,
+                        "minLength": 1,
+                        "format": "uri",
+                        "title": "Url",
+                        "description": "Webhook URL to POST to"
+                    },
+                    "inbox_filter": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Inbox Filter",
+                        "description": "If set, only notify for emails to this inbox"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "title": "Created At",
+                        "description": "When this webhook was registered"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "url"
+                ],
+                "title": "WebhookRegistration",
+                "description": "Webhook registration model.\n\nRepresents a registered webhook with optional filtering by inbox."
+            }
+        }
+    }
+}
