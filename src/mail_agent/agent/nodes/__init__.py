@@ -9,8 +9,8 @@ from mail_agent.agent.nodes.wait_for_reply import (
     wait_for_reply,
     set_webhook_server,
     get_webhook_server,
-    set_task_router,
-    get_task_router,
+    set_a2a_mode,
+    is_a2a_mode,
 )
 from mail_agent.agent.nodes.fetch_email import fetch_email
 from mail_agent.agent.nodes.extract_content import extract_content
@@ -24,8 +24,8 @@ __all__ = [
     "wait_for_reply",
     "set_webhook_server",
     "get_webhook_server",
-    "set_task_router",
-    "get_task_router",
+    "set_a2a_mode",
+    "is_a2a_mode",
     "fetch_email",
     "extract_content",
     "validate_response",

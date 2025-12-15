@@ -136,7 +136,21 @@ class Settings(BaseSettings):
     # State Persistence
     sqlite_db_path: str = Field(
         default="./mail_agent_state.db",
-        description="Path to SQLite database for state persistence",
+        description="Path to SQLite database for state persistence (checkpoints, suspended tasks, results)",
+    )
+
+    # Task Suspension (Non-blocking A2A mode)
+    task_suspend_timeout_seconds: int = Field(
+        default=3600,  # 1 hour
+        ge=60,
+        le=86400,  # Max 24 hours
+        description="Maximum time (seconds) a task can be suspended waiting for POC reply",
+    )
+    expired_task_cleanup_interval_seconds: int = Field(
+        default=300,  # 5 minutes
+        ge=30,
+        le=3600,
+        description="Interval (seconds) for cleaning up expired suspended tasks",
     )
 
     # HTTP Client Settings

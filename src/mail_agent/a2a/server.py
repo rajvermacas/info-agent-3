@@ -1,17 +1,23 @@
 """
-A2A Server - Bootstrap and run the A2A protocol server.
+A2A Server - Non-blocking A2A protocol server with checkpointing.
 
-Sets up the Starlette application with A2A endpoints, webhook server,
-and all required components.
+Sets up the Starlette application with:
+- A2A protocol endpoints
+- Task status polling endpoint (GET /tasks/{id})
+- Webhook server for email notifications
+- TaskManager for non-blocking task lifecycle
+- LangGraph checkpointer for state persistence
 """
 
 import asyncio
 import logging
 import signal
-from typing import Optional
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator, Optional
 
 import uvicorn
 from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -19,84 +25,157 @@ from a2a.server.tasks import InMemoryTaskStore
 
 from mail_agent.a2a.agent_card import create_agent_card
 from mail_agent.a2a.executor import MailAgentA2AExecutor
+from mail_agent.a2a.routes import create_tasks_router
 from mail_agent.agent.graph import compile_mail_agent_graph
-from mail_agent.agent.nodes.wait_for_reply import set_task_router, set_webhook_server
+from mail_agent.agent.nodes.wait_for_reply import set_a2a_mode, set_webhook_server
 from mail_agent.config import Settings, get_settings, configure_logging
+from mail_agent.persistence import DatabaseManager, TaskStore, create_checkpointer
+from mail_agent.task_manager import TaskManager
 from mail_agent.tools.smtp_client import SMTPClient
-from mail_agent.webhook.router import TaskRouter
 from mail_agent.webhook.server import WebhookServer
 
 
 logger = logging.getLogger(__name__)
 
 
-def create_a2a_application(
-    settings: Optional[Settings] = None,
-) -> tuple[Starlette, TaskRouter, WebhookServer]:
+class A2AServerResources:
     """
-    Create and configure the A2A server application.
+    Container for shared A2A server resources.
+
+    Holds references to all components that need lifecycle management.
+    """
+
+    def __init__(
+        self,
+        app: Starlette,
+        task_manager: TaskManager,
+        webhook_server: WebhookServer,
+        db_manager: DatabaseManager,
+        checkpointer,
+    ) -> None:
+        """
+        Initialize resource container.
+
+        Args:
+            app: Starlette application.
+            task_manager: TaskManager for task lifecycle.
+            webhook_server: WebhookServer for email notifications.
+            db_manager: DatabaseManager for persistence.
+            checkpointer: LangGraph checkpointer.
+        """
+        self.app = app
+        self.task_manager = task_manager
+        self.webhook_server = webhook_server
+        self.db_manager = db_manager
+        self.checkpointer = checkpointer
+
+
+async def create_a2a_application(
+    settings: Optional[Settings] = None,
+) -> A2AServerResources:
+    """
+    Create and configure the A2A server application with all resources.
 
     This function:
-    1. Creates the AgentCard with metadata
-    2. Sets up the TaskRouter for concurrent request routing
-    3. Sets up the WebhookServer with TaskRouter integration
-    4. Compiles the LangGraph mail agent
+    1. Initializes the database and checkpointer
+    2. Creates TaskStore and TaskManager
+    3. Sets up the WebhookServer
+    4. Compiles the LangGraph with checkpointer
     5. Creates the A2A executor
-    6. Builds the Starlette application
+    6. Builds the Starlette application with task routes
 
     Args:
         settings: Configuration settings. Uses get_settings() if not provided.
 
     Returns:
-        Tuple of (Starlette app, TaskRouter, WebhookServer).
+        A2AServerResources containing all initialized components.
     """
     if settings is None:
         settings = get_settings()
 
-    logger.info("Creating A2A application")
+    logger.info("Creating A2A application (non-blocking mode)")
 
-    # 1. Build Agent Card
+    # 1. Initialize database
+    logger.info(f"Initializing database: {settings.sqlite_db_path}")
+    db_manager = DatabaseManager(settings)
+    await db_manager.connect()
+    logger.info("Database connected")
+
+    # 2. Create checkpointer
+    logger.info("Creating LangGraph checkpointer")
+    checkpointer = await create_checkpointer(settings)
+    logger.info("Checkpointer created")
+
+    # 3. Create TaskStore
+    task_store = TaskStore(db_manager)
+    logger.info("TaskStore created")
+
+    # 4. Compile graph with checkpointer
+    logger.info("Compiling mail agent graph with checkpointer")
+    graph = compile_mail_agent_graph(checkpointer=checkpointer)
+    logger.info("Graph compiled with checkpointer")
+
+    # 5. Create WebhookServer (without TaskRouter - we'll use TaskManager)
+    webhook_server = WebhookServer(settings=settings)
+    logger.info("WebhookServer created")
+
+    # 6. Create TaskManager
+    task_manager = TaskManager(
+        db_manager=db_manager,
+        task_store=task_store,
+        checkpointer=checkpointer,
+        graph=graph,
+        settings=settings,
+    )
+    logger.info("TaskManager created")
+
+    # 7. Set global instances for wait_for_reply node
+    set_a2a_mode(True)
+    set_webhook_server(webhook_server)
+    logger.info("A2A mode enabled, webhook server configured")
+
+    # 8. Build Agent Card
     agent_card = create_agent_card(settings)
     logger.info(f"Agent card created: {agent_card.name} v{agent_card.version}")
 
-    # 2. Create shared resources
-    task_router = TaskRouter()
-    webhook_server = WebhookServer(settings=settings, task_router=task_router)
-
-    # 3. Set global instances for wait_for_reply node
-    set_task_router(task_router)
-    set_webhook_server(webhook_server)
-    logger.info("TaskRouter and WebhookServer configured for A2A mode")
-
-    # 4. Compile the mail agent graph
-    graph = compile_mail_agent_graph()
-    logger.info("Mail agent graph compiled")
-
-    # 5. Create executor
+    # 9. Create executor with TaskManager
     executor = MailAgentA2AExecutor(
         graph=graph,
-        task_router=task_router,
-        webhook_server=webhook_server,
+        task_manager=task_manager,
     )
-    logger.info("A2A executor created")
+    logger.info("A2A executor created (non-blocking)")
 
-    # 6. Create request handler with in-memory task store
-    task_store = InMemoryTaskStore()
+    # 10. Create request handler with in-memory task store
+    a2a_task_store = InMemoryTaskStore()
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
-        task_store=task_store,
+        task_store=a2a_task_store,
     )
-    logger.info("Request handler created with InMemoryTaskStore")
+    logger.info("Request handler created")
 
-    # 7. Build Starlette application
+    # 11. Build A2A Starlette application
     app_builder = A2AStarletteApplication(
         agent_card=agent_card,
         http_handler=request_handler,
     )
     app = app_builder.build()
-    logger.info("Starlette A2A application built")
+    logger.info("A2A Starlette application built")
 
-    return app, task_router, webhook_server
+    # 12. Mount task routes
+    tasks_router = create_tasks_router(task_manager)
+    # Convert FastAPI router to Starlette routes
+    from starlette.routing import Route
+    for route in tasks_router.routes:
+        app.routes.append(route)
+    logger.info("Task routes mounted")
+
+    return A2AServerResources(
+        app=app,
+        task_manager=task_manager,
+        webhook_server=webhook_server,
+        db_manager=db_manager,
+        checkpointer=checkpointer,
+    )
 
 
 async def run_a2a_server(
@@ -104,14 +183,15 @@ async def run_a2a_server(
     verbose: bool = False,
 ) -> None:
     """
-    Run the A2A server with webhook server.
+    Run the non-blocking A2A server with all components.
 
     This function:
-    1. Creates the A2A application
-    2. Starts the webhook server
-    3. Registers webhook with Mock SMTP server
-    4. Runs the A2A server (blocking)
-    5. Cleans up on shutdown
+    1. Creates the A2A application with all resources
+    2. Starts the TaskManager (restores suspended tasks)
+    3. Starts the webhook server
+    4. Registers webhook with Mock SMTP server
+    5. Runs the A2A server (blocking)
+    6. Cleans up on shutdown
 
     Args:
         settings: Configuration settings. Uses get_settings() if not provided.
@@ -126,11 +206,11 @@ async def run_a2a_server(
     configure_logging(settings)
 
     logger.info("=" * 60)
-    logger.info("MAIL AGENT A2A SERVER")
+    logger.info("MAIL AGENT A2A SERVER (NON-BLOCKING)")
     logger.info("=" * 60)
 
-    # Create application
-    app, task_router, webhook_server = create_a2a_application(settings)
+    # Create application and resources
+    resources = await create_a2a_application(settings)
 
     # SMTP client for webhook registration
     smtp_client = SMTPClient(settings)
@@ -149,12 +229,20 @@ async def run_a2a_server(
         loop.add_signal_handler(sig, signal_handler)
 
     try:
-        # 1. Start webhook server
+        # 1. Start TaskManager (restore suspended tasks)
+        logger.info("Starting TaskManager...")
+        await resources.task_manager.start()
+        logger.info(
+            f"TaskManager started with {resources.task_manager.suspended_task_count} "
+            "restored suspended tasks"
+        )
+
+        # 2. Start webhook server
         logger.info("Starting webhook server...")
-        await webhook_server.start()
+        await resources.webhook_server.start()
         logger.info(f"Webhook server listening on {settings.webhook_url}")
 
-        # 2. Check Mock SMTP server health
+        # 3. Check Mock SMTP server health
         logger.info("Checking mock SMTP server...")
         is_healthy = await smtp_client.health_check()
         if not is_healthy:
@@ -165,7 +253,7 @@ async def run_a2a_server(
         else:
             logger.info("Mock SMTP server is healthy")
 
-        # 3. Register webhook with Mock SMTP server
+        # 4. Register webhook with Mock SMTP server
         logger.info("Registering webhook with mock SMTP server...")
         try:
             webhook_response = await smtp_client.register_webhook()
@@ -175,13 +263,14 @@ async def run_a2a_server(
             logger.warning(f"Failed to register webhook: {e}")
             logger.warning("Webhook registration will need to be done manually")
 
-        # 4. Run A2A server
+        # 5. Run A2A server
         logger.info(f"Starting A2A server on http://{settings.a2a_host}:{settings.a2a_port}")
-        logger.info(f"Agent card available at http://{settings.a2a_host}:{settings.a2a_port}/.well-known/agent.json")
+        logger.info(f"Agent card: http://{settings.a2a_host}:{settings.a2a_port}/.well-known/agent.json")
+        logger.info(f"Task status: http://{settings.a2a_host}:{settings.a2a_port}/tasks/{{task_id}}")
         logger.info("-" * 60)
 
         config = uvicorn.Config(
-            app=app,
+            app=resources.app,
             host=settings.a2a_host,
             port=settings.a2a_port,
             log_level=settings.log_level.lower(),
@@ -208,16 +297,24 @@ async def run_a2a_server(
             except Exception as e:
                 logger.warning(f"Failed to unregister webhook: {e}")
 
+        # Stop TaskManager
+        await resources.task_manager.stop()
+        logger.info("TaskManager stopped")
+
         # Stop webhook server
-        await webhook_server.stop()
+        await resources.webhook_server.stop()
         logger.info("Webhook server stopped")
 
         # Close SMTP client
         await smtp_client.close()
         logger.info("SMTP client closed")
 
+        # Close database
+        await resources.db_manager.close()
+        logger.info("Database closed")
+
         # Clear global instances
-        set_task_router(None)
+        set_a2a_mode(False)
         logger.info("A2A server shutdown complete")
 
 

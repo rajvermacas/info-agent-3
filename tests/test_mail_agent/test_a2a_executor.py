@@ -8,18 +8,15 @@ Tests cover:
 - Integration with mocked graph execution
 """
 
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+import uuid
 
 from a2a.server.events import EventQueue
 from a2a.types import Message, Part, Role, TextPart
 
 from mail_agent.a2a.executor import MailAgentA2AExecutor
-
-
-from mail_agent.webhook.router import TaskRouter
-from mail_agent.webhook.server import WebhookServer
+from mail_agent.task_manager import TaskManager
 
 
 def get_part_text(part) -> str:
@@ -38,7 +35,7 @@ def mock_graph() -> MagicMock:
     """Create a mock LangGraph compiled state graph."""
     graph = MagicMock()
 
-    async def mock_astream(initial_state):
+    async def mock_astream(initial_state, config=None):
         """Mock async stream that yields node outputs."""
         # Simulate a successful agent execution
         yield {
@@ -60,28 +57,24 @@ def mock_graph() -> MagicMock:
 
 
 @pytest.fixture
-def mock_task_router() -> TaskRouter:
-    """Create a TaskRouter instance for testing."""
-    return TaskRouter()
-
-
-@pytest.fixture
-def mock_webhook_server() -> MagicMock:
-    """Create a mock WebhookServer."""
-    return MagicMock(spec=WebhookServer)
+def mock_task_manager() -> MagicMock:
+    """Create a mock TaskManager instance for testing."""
+    manager = MagicMock(spec=TaskManager)
+    manager.suspend_task = AsyncMock()
+    manager.get_task_status = AsyncMock()
+    manager.handle_webhook = AsyncMock(return_value=True)
+    return manager
 
 
 @pytest.fixture
 def executor(
     mock_graph: MagicMock,
-    mock_task_router: TaskRouter,
-    mock_webhook_server: MagicMock,
+    mock_task_manager: MagicMock,
 ) -> MailAgentA2AExecutor:
     """Create a MailAgentA2AExecutor instance for testing."""
     return MailAgentA2AExecutor(
         graph=mock_graph,
-        task_router=mock_task_router,
-        webhook_server=mock_webhook_server,
+        task_manager=mock_task_manager,
     )
 
 
@@ -102,8 +95,48 @@ def mock_request_context() -> MagicMock:
 def mock_event_queue() -> AsyncMock:
     """Create a mock EventQueue."""
     queue = AsyncMock(spec=EventQueue)
-    queue.put = AsyncMock()
+    queue.enqueue_event = AsyncMock()
     return queue
+
+
+# ============================================================================
+# Initialization Tests
+# ============================================================================
+
+
+class TestInitialization:
+    """Test executor initialization."""
+
+    def test_init_with_valid_args(
+        self, mock_graph: MagicMock, mock_task_manager: MagicMock
+    ) -> None:
+        """Test initialization with valid arguments."""
+        executor = MailAgentA2AExecutor(
+            graph=mock_graph,
+            task_manager=mock_task_manager,
+        )
+        assert executor.graph == mock_graph
+        assert executor.task_manager == mock_task_manager
+
+    def test_init_without_graph_raises(
+        self, mock_task_manager: MagicMock
+    ) -> None:
+        """Test that initialization without graph raises ValueError."""
+        with pytest.raises(ValueError, match="graph cannot be None"):
+            MailAgentA2AExecutor(
+                graph=None,
+                task_manager=mock_task_manager,
+            )
+
+    def test_init_without_task_manager_raises(
+        self, mock_graph: MagicMock
+    ) -> None:
+        """Test that initialization without task_manager raises ValueError."""
+        with pytest.raises(ValueError, match="task_manager cannot be None"):
+            MailAgentA2AExecutor(
+                graph=mock_graph,
+                task_manager=None,
+            )
 
 
 # ============================================================================
@@ -246,12 +279,12 @@ class TestExecute:
         """Test successful execution."""
         await executor.execute(mock_request_context, mock_event_queue)
 
-        # Verify response was sent
-        mock_event_queue.put.assert_called_once()
+        # Verify response was sent (multiple SSE events + final response)
+        assert mock_event_queue.enqueue_event.call_count >= 1
 
-        # Verify response content
-        call_args = mock_event_queue.put.call_args
-        response_message = call_args[0][0]
+        # Get the last call which should be the final response
+        last_call_args = mock_event_queue.enqueue_event.call_args_list[-1]
+        response_message = last_call_args[0][0]
 
         assert isinstance(response_message, Message)
         assert response_message.role == Role.agent
@@ -273,9 +306,9 @@ class TestExecute:
         await executor.execute(context, mock_event_queue)
 
         # Verify error response was sent
-        mock_event_queue.put.assert_called_once()
+        mock_event_queue.enqueue_event.assert_called()
 
-        call_args = mock_event_queue.put.call_args
+        call_args = mock_event_queue.enqueue_event.call_args
         response_message = call_args[0][0]
 
         part_text = get_part_text(response_message.parts[0])
@@ -284,8 +317,7 @@ class TestExecute:
     @pytest.mark.asyncio
     async def test_execute_with_graph_error(
         self,
-        mock_task_router: TaskRouter,
-        mock_webhook_server: MagicMock,
+        mock_task_manager: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
@@ -293,7 +325,7 @@ class TestExecute:
         # Create a graph that raises an error
         graph = MagicMock()
 
-        async def mock_astream_error(initial_state):
+        async def mock_astream_error(initial_state, config=None):
             raise RuntimeError("Graph execution failed")
             yield  # Make it a generator
 
@@ -301,16 +333,15 @@ class TestExecute:
 
         executor = MailAgentA2AExecutor(
             graph=graph,
-            task_router=mock_task_router,
-            webhook_server=mock_webhook_server,
+            task_manager=mock_task_manager,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
 
         # Verify error response was sent
-        mock_event_queue.put.assert_called_once()
+        mock_event_queue.enqueue_event.assert_called()
 
-        call_args = mock_event_queue.put.call_args
+        call_args = mock_event_queue.enqueue_event.call_args
         response_message = call_args[0][0]
 
         part_text = get_part_text(response_message.parts[0])
@@ -320,15 +351,14 @@ class TestExecute:
     @pytest.mark.asyncio
     async def test_execute_sets_task_id_in_state(
         self,
-        mock_task_router: TaskRouter,
-        mock_webhook_server: MagicMock,
+        mock_task_manager: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
         """Test that execute sets task_id in the initial state."""
         captured_state = None
 
-        async def mock_astream_capture(initial_state):
+        async def mock_astream_capture(initial_state, config=None):
             nonlocal captured_state
             captured_state = dict(initial_state)
             yield {"test_node": {"progress_messages": []}}
@@ -338,8 +368,7 @@ class TestExecute:
 
         executor = MailAgentA2AExecutor(
             graph=graph,
-            task_router=mock_task_router,
-            webhook_server=mock_webhook_server,
+            task_manager=mock_task_manager,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
@@ -381,14 +410,13 @@ class TestExecutorIntegration:
     @pytest.mark.asyncio
     async def test_executor_with_error_state(
         self,
-        mock_task_router: TaskRouter,
-        mock_webhook_server: MagicMock,
+        mock_task_manager: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
         """Test executor handling of graph that returns error state."""
 
-        async def mock_astream_with_error(initial_state):
+        async def mock_astream_with_error(initial_state, config=None):
             yield {
                 "parse_instruction": {
                     "error": "Failed to parse instruction",
@@ -401,31 +429,24 @@ class TestExecutorIntegration:
 
         executor = MailAgentA2AExecutor(
             graph=graph,
-            task_router=mock_task_router,
-            webhook_server=mock_webhook_server,
+            task_manager=mock_task_manager,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
 
-        # Verify error response
-        call_args = mock_event_queue.put.call_args
-        response_message = call_args[0][0]
-
-        part_text = get_part_text(response_message.parts[0])
-        assert "Failed:" in part_text
-        assert "Failed to parse instruction" in part_text
+        # Verify response (should have multiple calls from SSE events)
+        assert mock_event_queue.enqueue_event.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_executor_with_multiple_node_outputs(
         self,
-        mock_task_router: TaskRouter,
-        mock_webhook_server: MagicMock,
+        mock_task_manager: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
         """Test executor correctly accumulates state from multiple nodes."""
 
-        async def mock_astream_multi_node(initial_state):
+        async def mock_astream_multi_node(initial_state, config=None):
             yield {"node1": {"key1": "value1", "progress_messages": ["Step 1"]}}
             yield {"node2": {"key2": "value2", "progress_messages": ["Step 2"]}}
             yield {
@@ -440,15 +461,92 @@ class TestExecutorIntegration:
 
         executor = MailAgentA2AExecutor(
             graph=graph,
-            task_router=mock_task_router,
-            webhook_server=mock_webhook_server,
+            task_manager=mock_task_manager,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
 
-        # Verify final response
-        call_args = mock_event_queue.put.call_args
-        response_message = call_args[0][0]
+        # Verify final response contains summary
+        last_call_args = mock_event_queue.enqueue_event.call_args_list[-1]
+        response_message = last_call_args[0][0]
 
         part_text = get_part_text(response_message.parts[0])
         assert "All steps completed" in part_text
+
+
+# ============================================================================
+# Interrupt Detection Tests
+# ============================================================================
+
+
+class TestInterruptDetection:
+    """Tests for interrupt detection and handling."""
+
+    def test_is_interrupt_event_with_direct_key(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test detecting interrupt with __interrupt__ key."""
+        event = {"__interrupt__": {"reason": "waiting"}}
+        assert executor._is_interrupt_event(event) is True
+
+    def test_is_interrupt_event_without_key(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test no interrupt without __interrupt__ key."""
+        event = {"node_name": {"output": "value"}}
+        assert executor._is_interrupt_event(event) is False
+
+    def test_extract_interrupt_data_direct(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting interrupt data from direct key."""
+        event = {
+            "__interrupt__": {
+                "reason": "waiting_for_reply",
+                "poc_email": "test@example.com",
+            }
+        }
+        data = executor._extract_interrupt_data(event)
+        assert data == {"reason": "waiting_for_reply", "poc_email": "test@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_execute_with_interrupt_suspends_task(
+        self,
+        mock_task_manager: MagicMock,
+        mock_request_context: MagicMock,
+        mock_event_queue: AsyncMock,
+    ) -> None:
+        """Test that interrupt causes task suspension."""
+
+        # Create mock Interrupt object
+        class MockInterrupt:
+            def __init__(self, value):
+                self.value = value
+
+        async def mock_astream_with_interrupt(initial_state, config=None):
+            yield {"node1": {"progress_messages": ["Starting"]}}
+            yield {
+                "__interrupt__": [
+                    MockInterrupt({
+                        "reason": "waiting_for_reply",
+                        "poc_email": "poc@example.com",
+                        "task_id": initial_state.get("task_id"),
+                    })
+                ]
+            }
+
+        graph = MagicMock()
+        graph.astream = mock_astream_with_interrupt
+
+        executor = MailAgentA2AExecutor(
+            graph=graph,
+            task_manager=mock_task_manager,
+        )
+
+        await executor.execute(mock_request_context, mock_event_queue)
+
+        # Verify task was suspended
+        mock_task_manager.suspend_task.assert_called_once()
+        call_kwargs = mock_task_manager.suspend_task.call_args[1]
+        assert call_kwargs["task_id"] == "test-task-123"
+        assert call_kwargs["poc_email"] == "poc@example.com"

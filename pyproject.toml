@@ -35,6 +35,7 @@ dependencies = [
     # Mail Agent
     "langgraph>=0.2.0",
     "langgraph-checkpoint-sqlite>=1.0.0",
+    "aiosqlite>=0.19.0",
     "langchain-google-genai>=2.0.0",
     "langchain-openai>=0.2.0",
     "openpyxl>=3.1.0",
@@ -42,6 +43,8 @@ dependencies = [
     "aiosmtplib>=3.0.0",
     # A2A Protocol
     "a2a-sdk[http-server]>=0.2.0",
+    # SSE Streaming
+    "sse-starlette>=1.6.0",
 ]
 
 [project.optional-dependencies]

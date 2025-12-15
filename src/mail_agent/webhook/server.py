@@ -1,8 +1,8 @@
 """
 Webhook Server - FastAPI server for receiving email notifications.
 
-Runs embedded within the agent process and notifies via asyncio.Queue.
-Supports TaskRouter integration for A2A concurrent request routing.
+Runs embedded within the agent process and routes webhooks to TaskManager
+for non-blocking A2A mode, or to an asyncio.Queue for CLI mode.
 """
 
 import asyncio
@@ -14,13 +14,14 @@ from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 import uvicorn
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 
 from mail_agent.config import Settings, get_settings
 
 if TYPE_CHECKING:
-    from mail_agent.webhook.router import TaskRouter
+    from mail_agent.task_manager import TaskManager
+    from mail_agent.task_manager.models import WebhookPayload as TaskManagerWebhookPayload
 
 
 logger = logging.getLogger(__name__)
@@ -90,28 +91,28 @@ class WebhookServer:
     """
     Embedded FastAPI server for receiving webhook notifications.
 
-    The server runs in the background and puts received events on an asyncio.Queue
-    for the agent to process. Optionally integrates with TaskRouter for A2A mode
-    to route events to specific task queues.
+    Supports two modes:
+    1. A2A mode: Routes webhooks to TaskManager for task resumption
+    2. CLI mode: Puts events on an asyncio.Queue for direct processing
     """
 
     def __init__(
         self,
         settings: Optional[Settings] = None,
         event_queue: Optional[asyncio.Queue] = None,
-        task_router: Optional["TaskRouter"] = None,
+        task_manager: Optional["TaskManager"] = None,
     ) -> None:
         """
         Initialize webhook server.
 
         Args:
             settings: Configuration settings. Uses get_settings() if not provided.
-            event_queue: Queue for received events. Creates new queue if not provided.
-            task_router: Optional TaskRouter for A2A mode event routing.
+            event_queue: Queue for received events (CLI mode). Creates new queue if not provided.
+            task_manager: TaskManager for A2A mode webhook routing.
         """
         self._settings = settings or get_settings()
         self._event_queue: asyncio.Queue[WebhookEvent] = event_queue or asyncio.Queue()
-        self._task_router: Optional["TaskRouter"] = task_router
+        self._task_manager: Optional["TaskManager"] = task_manager
         self._server: Optional[uvicorn.Server] = None
         self._server_task: Optional[asyncio.Task] = None
         self._app: Optional[FastAPI] = None
@@ -119,28 +120,28 @@ class WebhookServer:
         logger.info(
             f"WebhookServer initialized: host={self._settings.webhook_host}, "
             f"port={self._settings.webhook_port}, path={self._settings.webhook_path}, "
-            f"task_router={'enabled' if task_router else 'disabled'}"
+            f"task_manager={'enabled' if task_manager else 'disabled'}"
         )
 
     @property
     def event_queue(self) -> asyncio.Queue[WebhookEvent]:
-        """Get the event queue for receiving webhook events."""
+        """Get the event queue for receiving webhook events (CLI mode)."""
         return self._event_queue
 
     @property
-    def task_router(self) -> Optional["TaskRouter"]:
-        """Get the TaskRouter instance if configured."""
-        return self._task_router
+    def task_manager(self) -> Optional["TaskManager"]:
+        """Get the TaskManager instance if configured."""
+        return self._task_manager
 
-    def set_task_router(self, task_router: "TaskRouter") -> None:
+    def set_task_manager(self, task_manager: "TaskManager") -> None:
         """
-        Set or update the TaskRouter instance.
+        Set or update the TaskManager instance.
 
         Args:
-            task_router: TaskRouter instance for A2A event routing.
+            task_manager: TaskManager instance for A2A webhook routing.
         """
-        self._task_router = task_router
-        logger.info("TaskRouter set for WebhookServer")
+        self._task_manager = task_manager
+        logger.info("TaskManager set for WebhookServer")
 
     def _create_app(self) -> FastAPI:
         """Create FastAPI application with webhook endpoint."""
@@ -168,8 +169,9 @@ class WebhookServer:
             - X-Email-ID: <uuid>
             - X-Webhook-Timestamp: <iso_timestamp>
 
-            When TaskRouter is configured (A2A mode), routes events to task-specific
-            queues based on sender email. Otherwise, uses the default event queue.
+            Routing behavior:
+            - If TaskManager is configured (A2A mode): Route to TaskManager
+            - Otherwise (CLI mode): Put on event queue
             """
             try:
                 # Log incoming request
@@ -186,42 +188,32 @@ class WebhookServer:
                 payload = WebhookPayload(**body)
                 event = WebhookEvent.from_payload(payload)
 
-                # Route through TaskRouter if available (A2A mode)
-                if self._task_router is not None:
-                    # Build payload dict for TaskRouter
-                    router_payload = {
-                        "event": payload.event,
-                        "email_id": payload.email_id,
-                        "from": payload.from_address,
-                        "to": payload.to,
-                        "subject": payload.subject,
-                        "has_attachments": payload.has_attachments,
-                        "attachment_count": payload.attachment_count,
-                        "received_at": payload.received_at,
-                        "body_preview": payload.body_preview,
-                    }
-                    routed = await self._task_router.route_event(router_payload)
-                    if routed:
+                # Route based on mode
+                if self._task_manager is not None:
+                    # A2A mode: Route through TaskManager
+                    handled = await self._route_to_task_manager(payload)
+                    if handled:
                         logger.info(
-                            f"Webhook event routed via TaskRouter: email_id={event.email_id}, "
+                            f"Webhook routed via TaskManager: email_id={event.email_id}, "
                             f"from={event.from_address}"
                         )
+                        return {"status": "received", "routed": "task_manager"}
                     else:
-                        # No task registered for this sender, fall back to default queue
+                        # No matching suspended task, fall back to queue
                         logger.info(
-                            f"No task registered for sender {event.from_address}, "
-                            "falling back to default queue"
+                            f"No suspended task for {event.from_address}, "
+                            "falling back to event queue"
                         )
                         await self._event_queue.put(event)
+                        return {"status": "received", "routed": "queue"}
                 else:
-                    # CLI mode: use default queue
+                    # CLI mode: Use event queue
                     await self._event_queue.put(event)
                     logger.info(
                         f"Webhook event queued: email_id={event.email_id}, "
                         f"from={event.from_address}, subject={event.subject}"
                     )
-
-                return {"status": "received"}
+                    return {"status": "received", "routed": "queue"}
 
             except Exception as e:
                 logger.error(f"Failed to process webhook: {e}")
@@ -234,9 +226,40 @@ class WebhookServer:
             return {
                 "status": "healthy",
                 "queue_size": self._event_queue.qsize(),
+                "task_manager": self._task_manager is not None,
             }
 
         return app
+
+    async def _route_to_task_manager(self, payload: WebhookPayload) -> bool:
+        """
+        Route webhook payload to TaskManager.
+
+        Args:
+            payload: Webhook payload to route.
+
+        Returns:
+            True if routed successfully, False if no matching task.
+        """
+        if self._task_manager is None:
+            return False
+
+        # Convert to TaskManager's WebhookPayload model
+        from mail_agent.task_manager.models import WebhookPayload as TMWebhookPayload
+
+        tm_payload = TMWebhookPayload(
+            event=payload.event,
+            email_id=payload.email_id,
+            from_address=payload.from_address,
+            to=payload.to,
+            subject=payload.subject,
+            has_attachments=payload.has_attachments,
+            attachment_count=payload.attachment_count,
+            received_at=payload.received_at,
+            body_preview=payload.body_preview,
+        )
+
+        return await self._task_manager.handle_webhook(tm_payload)
 
     async def start(self) -> None:
         """
@@ -304,7 +327,7 @@ class WebhookServer:
         timeout: Optional[float] = None,
     ) -> Optional[WebhookEvent]:
         """
-        Wait for a webhook event.
+        Wait for a webhook event (CLI mode).
 
         Args:
             timeout: Maximum time to wait in seconds. None for indefinite.
