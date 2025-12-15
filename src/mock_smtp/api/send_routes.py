@@ -1,5 +1,6 @@
 """API routes for sending emails directly (bypassing SMTP)."""
 
+import asyncio
 import logging
 from typing import List, Optional
 
@@ -8,6 +9,8 @@ from pydantic import BaseModel, Field
 
 from mock_smtp.store.inbox_store import InboxStore
 from mock_smtp.store.models import Email
+from mock_smtp.webhooks.dispatcher import WebhookDispatcher
+from mock_smtp.webhooks.registry import WebhookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +42,75 @@ class SendEmailRequest(BaseModel):
     )
 
 
-def create_send_router(inbox_store: InboxStore) -> APIRouter:
+def create_send_router(
+    inbox_store: InboxStore,
+    webhook_registry: WebhookRegistry,
+    webhook_dispatcher: WebhookDispatcher
+) -> APIRouter:
     """
     Create send router with dependency injection.
 
     Args:
         inbox_store: InboxStore instance
+        webhook_registry: WebhookRegistry instance for finding webhooks
+        webhook_dispatcher: WebhookDispatcher instance for sending notifications
 
     Returns:
         Configured APIRouter
     """
     # Create fresh router each time to avoid closure issues with reused singletons
     router = APIRouter()
+
+    async def _notify_webhooks(email: Email) -> None:
+        """
+        Notify registered webhooks about the new email.
+
+        Args:
+            email: Email that was sent
+        """
+        try:
+            # Get webhooks for each recipient
+            webhook_tasks = []
+
+            for recipient in email.to_addresses:
+                webhooks = webhook_registry.get_webhooks_for_inbox(recipient)
+
+                for webhook in webhooks:
+                    webhook_tasks.append((str(webhook.url), email))
+
+            if not webhook_tasks:
+                logger.debug(
+                    f"No webhooks registered for email {email.id}"
+                )
+                return
+
+            logger.info(
+                f"Dispatching {len(webhook_tasks)} webhooks for "
+                f"email {email.id} (via REST API)"
+            )
+
+            # Dispatch all webhooks concurrently
+            results = await webhook_dispatcher.dispatch_batch(webhook_tasks)
+
+            # Log results
+            for result in results:
+                if result.get("status") == "sent":
+                    logger.debug(
+                        f"Webhook sent: {result.get('url')} "
+                        f"(status={result.get('status_code')})"
+                    )
+                else:
+                    logger.warning(
+                        f"Webhook failed: {result.get('url')} "
+                        f"(error={result.get('error')})"
+                    )
+
+        except Exception as e:
+            logger.error(
+                f"Error notifying webhooks for email {email.id}: "
+                f"{type(e).__name__}: {e}",
+                exc_info=True
+            )
 
     @router.post(
         "/send",
@@ -113,6 +173,9 @@ def create_send_router(inbox_store: InboxStore) -> APIRouter:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to store email: {type(e).__name__}"
             )
+
+        # Dispatch webhooks asynchronously (fire-and-forget, don't block response)
+        asyncio.create_task(_notify_webhooks(email))
 
         return {
             "message": "Email sent successfully",

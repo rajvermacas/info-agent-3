@@ -67,7 +67,21 @@ def sample_inbox(sample_email):
 
 
 @pytest.fixture
-def api_client(inbox_store, webhook_registry):
+def webhook_dispatcher_sync():
+    """
+    Create a WebhookDispatcher for sync tests.
+
+    Note: This dispatcher is NOT started - for sync tests that don't need
+    actual HTTP dispatch. Use webhook_dispatcher for async tests.
+    """
+    return WebhookDispatcher(
+        timeout_seconds=5.0,
+        max_retries=1
+    )
+
+
+@pytest.fixture
+def api_client(inbox_store, webhook_registry, webhook_dispatcher_sync):
     """Create a TestClient for API testing."""
     from mock_smtp.api.router import create_api_router
     from fastapi import FastAPI
@@ -77,8 +91,13 @@ def api_client(inbox_store, webhook_registry):
     # Store references in app state so routes can access them
     app.state.inbox_store = inbox_store
     app.state.webhook_registry = webhook_registry
+    app.state.webhook_dispatcher = webhook_dispatcher_sync
 
-    api_router = create_api_router(inbox_store, webhook_registry)
+    api_router = create_api_router(
+        inbox_store=inbox_store,
+        webhook_registry=webhook_registry,
+        webhook_dispatcher=webhook_dispatcher_sync
+    )
     app.include_router(api_router)
 
     return TestClient(app)

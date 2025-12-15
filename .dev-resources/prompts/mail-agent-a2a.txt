@@ -1,0 +1,231 @@
+I need to migrate mail agent langgrpah agent into google agent to agent protocol using a2a-sdk
+Below is a reference on how to do it.
+
+
+-----
+
+**Context & Objective:**
+I have a fully functional **LangGraph** agent (a compiled `StateGraph` runnable). My goal is to expose this agent as a web service compliant with the **Google A2A (Agent2Agent) Protocol**.
+
+You are tasked with writing the wrapper code (glue layer) that sits between the incoming A2A HTTP requests and my internal LangGraph logic.
+
+**Core Dependencies:**
+
+  * Existing: `langgraph`, `langchain-core`
+  * New: `a2a-sdk` (install via `pip install a2a-sdk[http-server]`)
+  * Server: `uvicorn`
+
+-----
+
+### **Part 1: Architectural Mapping (Theory of Operation)**
+
+To successfully migrate, you must understand how A2A concepts map to LangGraph concepts. Please implement the following translations in your code:
+
+1.  **The "Task" vs. The "Thread":**
+
+      * **A2A Concept:** A `Task` represents a unit of work or a conversation session, identified by a `task_id`.
+      * **LangGraph Concept:** A `Thread` represents the persistence scope of a conversation, identified by a `thread_id`.
+      * **Requirement:** You must pass the A2A `context.task_id` into the LangGraph `config` as the `thread_id`. This ensures that if the same A2A client sends a follow-up message to the same task, LangGraph remembers the context.
+
+2.  **The "Message" vs. The "State":**
+
+      * **A2A Concept:** Inputs come as `Message` objects containing a list of `Part` (usually `TextPart`).
+      * **LangGraph Concept:** Inputs are a dictionary (state) containing a list of `BaseMessage` (e.g., `HumanMessage`).
+      * **Requirement:** You must parse the text from the A2A `Message` and wrap it in a `HumanMessage` before invoking the graph. Conversely, extract the content of the final `AIMessage` from the graph output to create the A2A response.
+
+-----
+
+### **Part 2: Implementation Reference**
+
+Please write the following two files: `executor.py` and `server.py`.
+
+#### **A. The Executor (`executor.py`)**
+
+This class inherits from `a2a.server.agent_execution.AgentExecutor`. It is the bridge that translates protocols.
+
+**Key Requirements for the Code:**
+
+1.  **Accept the Graph:** The `__init__` method should accept the compiled LangGraph runnable.
+2.  **Handle Async:** Use `graph.ainvoke` inside the `execute` method.
+3.  **Map ID for Persistence:** Pass `task_id` to the graph config.
+
+<!-- end list -->
+
+```python
+# executor.py reference pattern
+
+from typing import Any, Dict
+from a2a.server.agent_execution import AgentExecutor, RequestContext
+from a2a.server.events import EventQueue
+from a2a.types import Message, TextPart, Role
+
+# LangChain/Graph imports
+from langchain_core.messages import HumanMessage
+from langgraph.graph.state import CompiledStateGraph
+
+class LangGraphA2AExecutor(AgentExecutor):
+    def __init__(self, graph: CompiledStateGraph):
+        self.graph = graph
+
+    async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """
+        Translates A2A request -> LangGraph input -> A2A response.
+        """
+        
+        # 1. EXTRACT INPUT
+        # A2A sends the user's prompt inside context.request.params.message
+        # We assume the first part is the text prompt.
+        incoming_message = context.request.params.message
+        user_text = incoming_message.parts[0].text
+        
+        # 2. CONFIGURE PERSISTENCE
+        # We map the A2A 'task_id' to the LangGraph 'thread_id'.
+        # This is CRITICAL for maintaining conversation memory.
+        config = {"configurable": {"thread_id": context.task_id}}
+        
+        # 3. PREPARE GRAPH STATE
+        # Adjust 'messages' key based on your specific graph schema.
+        graph_input = {"messages": [HumanMessage(content=user_text)]}
+        
+        # 4. EXECUTE GRAPH
+        # We use ainvoke for async execution.
+        try:
+            final_state = await self.graph.ainvoke(graph_input, config=config)
+            
+            # 5. EXTRACT OUTPUT
+            # Assuming the standard pattern where the last message in state is the AI response.
+            ai_response_content = final_state["messages"][-1].content
+            
+            # 6. SEND RESPONSE
+            # Wrap the text back into an A2A Message object.
+            response_message = Message(
+                role=Role.AGENT,
+                parts=[TextPart(text=ai_response_content)]
+            )
+            
+            # Put the message onto the event queue to send it back to the client.
+            await event_queue.put(response_message)
+            
+        except Exception as e:
+            # Handle graph errors gracefully
+            error_msg = Message(role=Role.AGENT, parts=[TextPart(text=f"Error: {str(e)}")])
+            await event_queue.put(error_msg)
+```
+
+#### **B. The Server (`server.py`)**
+
+This sets up the HTTP application and the **Agent Card** (metadata).
+
+**Key Requirements for the Code:**
+
+1.  **Define Identity:** Create an `AgentCard` with a clear description.
+2.  **Define Capabilities:** Use `AgentCapability` to describe what the agent does (input/output schema).
+3.  **Bootstrapping:** Use `A2AStarletteApplication` to serve it.
+
+<!-- end list -->
+
+```python
+# server.py reference pattern
+
+import uvicorn
+from a2a.server.apps import A2AStarletteApplication
+from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCard, AgentCapability, AgentSkill
+
+# Import the executor we just created and your graph
+from executor import LangGraphA2AExecutor
+from my_agent_graph import graph  # <--- REPLACE THIS with actual import
+
+# 1. METADATA CONFIGURATION
+# This tells other agents who we are.
+agent_card = AgentCard(
+    name="LangGraph Interaction Agent",
+    description="An intelligent agent powered by LangGraph that handles [INSERT FUNCTION].",
+    url="http://localhost:8000",
+    version="0.1.0",
+    capabilities=AgentCapability(
+        skills=[
+            AgentSkill(
+                name="chat",
+                description="Process complex queries using a state graph",
+                input_schema={
+                    "type": "object", 
+                    "properties": {"text": {"type": "string"}}
+                },
+                output_schema={
+                    "type": "object", 
+                    "properties": {"response": {"type": "string"}}
+                }
+            )
+        ]
+    )
+)
+
+# 2. APPLICATION WIRING
+# We use InMemoryTaskStore for simplicity, but for production, 
+# you might want a persistent store (Redis/Postgres) if the server restarts.
+request_handler = DefaultRequestHandler(
+    agent_executor=LangGraphA2AExecutor(graph),
+    task_store=InMemoryTaskStore()
+)
+
+# 3. BUILD APP
+# This creates the Starlette (FastAPI-compatible) app
+app_builder = A2AStarletteApplication(
+    agent_card=agent_card,
+    http_handler=request_handler
+)
+app = app_builder.build()
+
+if __name__ == "__main__":
+    # Run on port 8000
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+-----
+
+### **Part 3: Special Considerations (Do not ignore)**
+
+  * **Streaming Support:** If the User requires streaming tokens (typewriter effect), change `await self.graph.ainvoke` to `async for event in self.graph.astream_events`. You will need to emit multiple `Message` events to the `event_queue` as chunks arrive. For now, stick to `invoke` unless otherwise requested.
+  * **Authentication:** The A2A protocol supports auth. If this agent is public, ensure you review the `A2AStarletteApplication` auth middleware settings.
+  * **Tool Calling:** If your LangGraph agent uses tools, the A2A wrapper does not need to know about them. The graph handles the tool execution internally. The A2A wrapper only cares about the final text output.
+
+-----
+
+**Task:**
+Using the reference patterns above, please refactor my existing agent code to run as an A2A service.
+
+------------------------------------
+
+New Questions for Brainstorming
+
+  A. Architectural Concern: State Mismatch
+
+  Your current agent uses custom state (user_instruction, parsed_request, etc.), not messages: List[BaseMessage]. The reference pattern in the prompt assumes standard message-based state.
+
+  Q: How should we handle this mapping?
+
+  | Option | Approach                                                    | Trade-off                                                  |
+  |--------|-------------------------------------------------------------|------------------------------------------------------------|
+  | A      | Wrap instruction in HumanMessage, call run_agent() directly | Current adapter approach, works but no conversation memory |
+  | B      | Add LangGraph checkpointer + map task_id → thread_id        | Enables multi-turn conversations                           |
+  | C      | Refactor agent to use standard messages state               | Major refactor, future-proof                               |
+
+  Default: Option A (already implemented) - acceptable if single-request interactions are the norm.
+
+  ---
+  B. Webhook Server Lifecycle
+
+  Current a2a_adapter.py shares a single WebhookServer instance across requests.
+
+  Q: What happens with concurrent A2A requests?
+  - Current: All requests share one webhook queue → potential race condition
+  - Each webhook event goes to ONE waiting request
+
+  Suggestion: Should we add task_id tagging to webhook events for routing? - Yes
+
+  ---
+  C. Missing Pieces in Current A2A Adapter
+
+  There is no a2a adapter currently implemented.

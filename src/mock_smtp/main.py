@@ -80,7 +80,8 @@ async def lifespan(app: FastAPI):
     # This ensures the router captures the real instances, not fallbacks
     api_router = create_api_router(
         inbox_store=inbox_store,
-        webhook_registry=webhook_registry
+        webhook_registry=webhook_registry,
+        webhook_dispatcher=webhook_dispatcher
     )
     app.include_router(api_router)
     logger.info("API router created and included with shared resources")

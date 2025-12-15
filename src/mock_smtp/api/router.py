@@ -9,6 +9,7 @@ from mock_smtp.api.inbox_routes import create_inbox_router
 from mock_smtp.api.send_routes import create_send_router
 from mock_smtp.api.webhook_routes import create_webhook_router
 from mock_smtp.store.inbox_store import InboxStore
+from mock_smtp.webhooks.dispatcher import WebhookDispatcher
 from mock_smtp.webhooks.registry import WebhookRegistry
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 def create_api_router(
     inbox_store: InboxStore,
-    webhook_registry: WebhookRegistry
+    webhook_registry: WebhookRegistry,
+    webhook_dispatcher: WebhookDispatcher
 ) -> APIRouter:
     """
     Create the main API router with all subrouters.
@@ -24,6 +26,7 @@ def create_api_router(
     Args:
         inbox_store: InboxStore instance
         webhook_registry: WebhookRegistry instance
+        webhook_dispatcher: WebhookDispatcher instance for sending notifications
 
     Returns:
         Configured APIRouter with all endpoints
@@ -33,7 +36,11 @@ def create_api_router(
     # Create and include all subrouters
     inbox_router = create_inbox_router(inbox_store)
     email_router = create_email_router(inbox_store)
-    send_router = create_send_router(inbox_store)
+    send_router = create_send_router(
+        inbox_store=inbox_store,
+        webhook_registry=webhook_registry,
+        webhook_dispatcher=webhook_dispatcher
+    )
     webhook_router = create_webhook_router(webhook_registry)
 
     # Include routers
