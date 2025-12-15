@@ -71,6 +71,9 @@ async def wait_for_reply(state: AgentState) -> dict[str, Any]:
         # Get webhook server
         webhook_server = get_webhook_server()
 
+        # Check for designated queue in state
+        webhook_queue = state.get("webhook_queue")
+
         progress_msg = f"Waiting for reply from {current_poc}..."
         logger.info(progress_msg)
 
@@ -80,7 +83,16 @@ async def wait_for_reply(state: AgentState) -> dict[str, Any]:
 
         while event is None:
             # Wait for any webhook event
-            event = await webhook_server.wait_for_event(timeout=5.0)
+            if webhook_queue:
+                # Use designated queue
+                try:
+                    event = await asyncio.wait_for(webhook_queue.get(), timeout=5.0)
+                    webhook_queue.task_done()
+                except asyncio.TimeoutError:
+                    event = None
+            else:
+                # Use legacy global server wait
+                event = await webhook_server.wait_for_event(timeout=5.0)
 
             if event is None:
                 # Timeout, continue waiting

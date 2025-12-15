@@ -103,7 +103,9 @@ class WebhookServer:
             event_queue: Queue for received events. Creates new queue if not provided.
         """
         self._settings = settings or get_settings()
+        # Main queue for backward compatibility or single listener
         self._event_queue: asyncio.Queue[WebhookEvent] = event_queue or asyncio.Queue()
+        self._listeners: list[asyncio.Queue[WebhookEvent]] = []
         self._server: Optional[uvicorn.Server] = None
         self._server_task: Optional[asyncio.Task] = None
         self._app: Optional[FastAPI] = None
@@ -115,8 +117,31 @@ class WebhookServer:
 
     @property
     def event_queue(self) -> asyncio.Queue[WebhookEvent]:
-        """Get the event queue for receiving webhook events."""
+        """Get the event queue for receiving webhook events (deprecated)."""
         return self._event_queue
+
+    async def subscribe(self) -> asyncio.Queue[WebhookEvent]:
+        """Subscribe to webhook events."""
+        queue = asyncio.Queue()
+        self._listeners.append(queue)
+        return queue
+
+    async def unsubscribe(self, queue: asyncio.Queue[WebhookEvent]) -> None:
+        """Unsubscribe from webhook events."""
+        if queue in self._listeners:
+            self._listeners.remove(queue)
+        # Drain queue to prevent memory leaks if there are items left
+        while not queue.empty():
+            queue.get_nowait()
+
+    @asynccontextmanager
+    async def listen(self):
+        """Context manager to subscribe to webhook events."""
+        queue = await self.subscribe()
+        try:
+            yield queue
+        finally:
+            await self.unsubscribe(queue)
 
     def _create_app(self) -> FastAPI:
         """Create FastAPI application with webhook endpoint."""
@@ -159,11 +184,16 @@ class WebhookServer:
                 payload = WebhookPayload(**body)
                 event = WebhookEvent.from_payload(payload)
 
-                # Put event on queue
+                # Put event on main queue (legacy)
                 await self._event_queue.put(event)
+                
+                # Broadcast to all listeners
+                for listener in self._listeners:
+                    await listener.put(event)
+                    
                 logger.info(
-                    f"Webhook event queued: email_id={event.email_id}, "
-                    f"from={event.from_address}, subject={event.subject}"
+                    f"Webhook event queued and broadcast to {len(self._listeners)} listeners: "
+                    f"email_id={event.email_id}, from={event.from_address}, subject={event.subject}"
                 )
 
                 return {"status": "received"}

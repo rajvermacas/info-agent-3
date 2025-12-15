@@ -34,13 +34,18 @@ app = typer.Typer(
 # ============================================================================
 
 
-async def run_agent(instruction: str, verbose: bool = False) -> dict:
+async def run_agent(
+    instruction: str, 
+    verbose: bool = False, 
+    webhook_server: Optional[WebhookServer] = None
+) -> dict:
     """
     Run the mail agent with the given instruction.
 
     Args:
         instruction: User instruction (e.g., "send mail to x@y.com asking...")
         verbose: Enable verbose output.
+        webhook_server: Optional existing webhook server instance.
 
     Returns:
         Final agent state.
@@ -53,26 +58,37 @@ async def run_agent(instruction: str, verbose: bool = False) -> dict:
     configure_logging(settings)
 
     logger.info(f"Starting mail agent with instruction: {instruction}")
-    print(f"\n{'='*60}")
-    print("MAIL AGENT")
-    print(f"{'='*60}\n")
-    print(f"Instruction: {instruction}\n")
+    if verbose:
+        print(f"\n{'='*60}")
+        print("MAIL AGENT")
+        print(f"{'='*60}\n")
+        print(f"Instruction: {instruction}\n")
 
     # Initialize components
-    webhook_server = WebhookServer(settings)
+    # Use provided server or create new one
+    use_existing_server = webhook_server is not None
+    if not webhook_server:
+        webhook_server = WebhookServer(settings)
+    
     smtp_client = SMTPClient(settings)
 
     # Set webhook server for wait_for_reply node
     set_webhook_server(webhook_server)
+    
+    webhook_listener_queue = None
 
     try:
-        # Start webhook server
-        print("Starting webhook server...")
-        await webhook_server.start()
-        print(f"Webhook server listening on {settings.webhook_url}")
+        # Start webhook server if we own it
+        if not use_existing_server:
+            if verbose: print("Starting webhook server...")
+            await webhook_server.start()
+            if verbose: print(f"Webhook server listening on {settings.webhook_url}")
+        
+        # Subscribe to webhooks for this run
+        webhook_listener_queue = await webhook_server.subscribe()
 
         # Check mock SMTP server health
-        print("Checking mock SMTP server...")
+        if verbose: print("Checking mock SMTP server...")
         is_healthy = await smtp_client.health_check()
         if not is_healthy:
             print(
@@ -82,11 +98,11 @@ async def run_agent(instruction: str, verbose: bool = False) -> dict:
             # Continue anyway - might start later
 
         # Register webhook with mock SMTP server
-        print("Registering webhook with mock SMTP server...")
+        if verbose: print("Registering webhook with mock SMTP server...")
         try:
             webhook_response = await smtp_client.register_webhook()
             webhook_id = str(webhook_response.webhook_id)
-            print(f"Webhook registered: {webhook_id}")
+            if verbose: print(f"Webhook registered: {webhook_id}")
         except Exception as e:
             print(f"WARNING: Failed to register webhook: {e}")
             print("Continuing without webhook registration...")
@@ -96,12 +112,17 @@ async def run_agent(instruction: str, verbose: bool = False) -> dict:
         initial_state = create_initial_state(instruction)
         if webhook_id:
             initial_state["webhook_id"] = webhook_id
+        
+        # Inject listener queue into state
+        initial_state["webhook_queue"] = webhook_listener_queue
 
         # Compile and run graph
-        print("\nStarting agent workflow...\n")
-        print("-" * 60)
+        if verbose:
+            print("\nStarting agent workflow...\n")
+            print("-" * 60)
 
         graph = compile_mail_agent_graph()
+
 
         # Run graph with streaming to show progress
         final_state = None
@@ -147,9 +168,13 @@ async def run_agent(instruction: str, verbose: bool = False) -> dict:
             except Exception as e:
                 logger.warning(f"Failed to unregister webhook: {e}")
 
-        # Stop webhook server
-        await webhook_server.stop()
-        print("Webhook server stopped.")
+        if webhook_listener_queue:
+            await webhook_server.unsubscribe(webhook_listener_queue)
+
+        # Stop webhook server if we own it
+        if not use_existing_server:
+            await webhook_server.stop()
+            if verbose: print("Webhook server stopped.")
 
         # Close SMTP client
         await smtp_client.close()
