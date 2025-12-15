@@ -1,0 +1,25 @@
+Right now the mail_agent[@src/mail_agent/main.py] when it sends the mail to the requested user. It gets blocked in wait state waiting for the reply. How do we make it non blocking.
+As it is also affecting the flow when a a2a_client[@scripts/a2a_client.py] makes a call to the a2a server which happens to be the mail_agent server in this scenario the a2a_client also gets blocked. I want non blocking calls.
+--------------------------
+
+Q2: Should the wait_for_reply node remain blocking internally?
+
+  The agent graph itself has a node that blocks waiting for human email reply:
+
+  - Option A: Keep it blocking internally
+    - This is the correct behavior for the agent's workflow
+    - Just don't block the client waiting for it
+  - Option B: Make it non-blocking with checkpointing
+    - Save state, return to client, resume when webhook arrives
+    - More complex, requires LangGraph checkpointing
+
+  Answer: Option B - Make it non-blocking with checkpointing. Use sqlite
+
+
+Questions for You
+
+  1. Which pattern do you prefer? A: non-blocking+server side events
+  3. Is the 300-second timeout in wait_for_reply acceptable, or should it be configurable/longer for A2A mode? - configure it for 1 hour
+  4. Do you need backward compatibility with current blocking behavior, or can we change the default? - No backward compatibility at all.
+
+Show me the final architecture plan.
