@@ -28,6 +28,13 @@ app = typer.Typer(
     add_completion=False,
 )
 
+# A2A subcommand app
+a2a_app = typer.Typer(
+    name="a2a",
+    help="A2A protocol server commands.",
+    add_completion=False,
+)
+
 
 # ============================================================================
 # Helper Functions
@@ -270,6 +277,46 @@ def config() -> None:
         print(f"API Key Set: {'Yes' if settings.azure_openai_api_key else 'No'}")
     print(f"Temperature: {settings.llm_temperature}")
     print(f"Max Tokens: {settings.llm_max_tokens}")
+    print()
+    print("A2A Server Configuration")
+    print("-" * 40)
+    print(f"A2A Host: {settings.a2a_host}")
+    print(f"A2A Port: {settings.a2a_port}")
+    print(f"Agent Name: {settings.a2a_agent_name}")
+    print(f"Agent Version: {settings.a2a_agent_version}")
+
+
+@app.command()
+def a2a(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Enable verbose output",
+    ),
+) -> None:
+    """
+    Start the A2A protocol server.
+
+    The A2A server exposes the Mail Agent via the Google Agent-to-Agent
+    protocol, allowing external agents to interact with it via JSON-RPC 2.0
+    over HTTP.
+
+    Endpoints:
+    - GET /.well-known/agent.json - Agent discovery card
+    - POST /jsonrpc - JSON-RPC 2.0 endpoint for task execution
+
+    Example:
+        mail-agent a2a
+        mail-agent a2a --verbose
+    """
+    from mail_agent.a2a.server import run_a2a_server
+
+    try:
+        asyncio.run(run_a2a_server(verbose=verbose))
+    except KeyboardInterrupt:
+        print("\nA2A server stopped by user.")
+        sys.exit(0)
 
 
 def main() -> None:

@@ -226,6 +226,9 @@ class AgentState(TypedDict, total=False):
     current_node: str
     current_poc: Optional[str]  # POC being processed
 
+    # A2A task identifier (set when running in A2A mode)
+    task_id: Optional[str]
+
     # Pending webhook events (email IDs)
     pending_webhooks: Annotated[list[str], operator.add]
 

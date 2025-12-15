@@ -152,6 +152,32 @@ class Settings(BaseSettings):
         description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
     )
 
+    # A2A Server Configuration
+    a2a_host: str = Field(
+        default="0.0.0.0",
+        description="A2A server bind address",
+    )
+    a2a_port: int = Field(
+        default=8000,
+        ge=1,
+        le=65535,
+        description="A2A server port",
+    )
+
+    # A2A Agent Card Metadata
+    a2a_agent_name: str = Field(
+        default="Mail Agent",
+        description="Agent name for A2A protocol",
+    )
+    a2a_agent_description: str = Field(
+        default="Intelligent email assistant powered by LangGraph that handles email communication with POCs to gather information.",
+        description="Agent description for A2A protocol",
+    )
+    a2a_agent_version: str = Field(
+        default="1.0.0",
+        description="Agent version for A2A protocol",
+    )
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
