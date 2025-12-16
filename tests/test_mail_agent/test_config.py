@@ -6,7 +6,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-from mail_agent.config import Settings, get_settings, configure_logging
+from mail_agent.config import LLMProvider, Settings, get_settings, configure_logging
 
 
 class TestSettings:
@@ -212,3 +212,78 @@ class TestConfigureLogging:
         """Test configure_logging with explicit settings."""
         configure_logging(mock_settings)
         # Should not raise
+
+
+class TestOpenRouterConfiguration:
+    """Tests for OpenRouter provider configuration."""
+
+    def test_openrouter_provider_enum(self):
+        """Test OpenRouter provider is in enum."""
+        assert LLMProvider.OPENROUTER.value == "openrouter"
+
+    def test_openrouter_default_model(self):
+        """Test OpenRouter default model."""
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings()
+        assert settings.openrouter_model == "anthropic/claude-3.5-sonnet"
+
+    def test_openrouter_config_fields(self):
+        """Test OpenRouter configuration fields."""
+        settings = Settings(
+            llm_provider=LLMProvider.OPENROUTER,
+            openrouter_api_key="test-key",
+            openrouter_model="google/gemini-2.5-flash",
+            openrouter_site_url="https://example.com",
+            openrouter_app_name="Test App",
+        )
+
+        assert settings.llm_provider == LLMProvider.OPENROUTER
+        assert settings.openrouter_api_key == "test-key"
+        assert settings.openrouter_model == "google/gemini-2.5-flash"
+        assert settings.openrouter_site_url == "https://example.com"
+        assert settings.openrouter_app_name == "Test App"
+
+    def test_openrouter_optional_fields_default_none(self):
+        """Test OpenRouter optional fields default to None."""
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings()
+
+        assert settings.openrouter_api_key is None
+        assert settings.openrouter_site_url is None
+        assert settings.openrouter_app_name is None
+
+    def test_openrouter_env_override(self):
+        """Test OpenRouter configuration via environment variables."""
+        env_vars = {
+            "MAIL_AGENT_LLM_PROVIDER": "openrouter",
+            "MAIL_AGENT_OPENROUTER_API_KEY": "env-test-key",
+            "MAIL_AGENT_OPENROUTER_MODEL": "openai/gpt-4-turbo",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=False):
+            settings = Settings()
+
+        assert settings.llm_provider == LLMProvider.OPENROUTER
+        assert settings.openrouter_api_key == "env-test-key"
+        assert settings.openrouter_model == "openai/gpt-4-turbo"
+
+    def test_openrouter_validation_missing_key_logs_warning(self):
+        """Test validation logs warning when OpenRouter key is missing."""
+        import logging
+
+        with patch.object(
+            logging.getLogger("mail_agent.config"), "warning"
+        ) as mock_warn:
+            Settings(
+                llm_provider=LLMProvider.OPENROUTER,
+                openrouter_api_key=None,
+            )
+            mock_warn.assert_called()
+            call_args = str(mock_warn.call_args)
+            assert "MAIL_AGENT_OPENROUTER_API_KEY" in call_args
+
+    def test_llm_provider_description_includes_openrouter(self):
+        """Test llm_provider field description includes openrouter."""
+        # Access the field info from the class, not the instance
+        field_info = Settings.model_fields["llm_provider"]
+        assert "openrouter" in field_info.description

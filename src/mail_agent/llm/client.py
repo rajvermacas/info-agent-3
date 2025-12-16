@@ -1,7 +1,7 @@
 """
 LLM Client - Multi-provider LLM integration via LangChain.
 
-Supports Google Gemini and Azure OpenAI providers.
+Supports Google Gemini, Azure OpenAI, and OpenRouter providers.
 Provides async methods for LLM operations with structured output support.
 """
 
@@ -12,7 +12,7 @@ from typing import Any, Optional, Type, TypeVar
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from pydantic import BaseModel
 
 from mail_agent.config import LLMProvider, Settings, get_settings
@@ -88,6 +88,8 @@ class LLMClient:
             self._model, self._model_name = self._init_gemini()
         elif self._provider == LLMProvider.AZURE_OPENAI:
             self._model, self._model_name = self._init_azure_openai()
+        elif self._provider == LLMProvider.OPENROUTER:
+            self._model, self._model_name = self._init_openrouter()
         else:
             raise LLMConfigurationError(
                 f"Unknown LLM provider: {self._provider}. "
@@ -144,6 +146,47 @@ class LLMClient:
             temperature=self._temperature,
             max_tokens=self._max_tokens,
         )
+        return model, model_name
+
+    def _init_openrouter(self) -> tuple[BaseChatModel, str]:
+        """
+        Initialize OpenRouter model using OpenAI-compatible API.
+
+        OpenRouter provides access to 200+ models via https://openrouter.ai/api/v1
+
+        Returns:
+            Tuple of (model instance, model name string)
+
+        Raises:
+            LLMConfigurationError: If API key is missing
+        """
+        if not self._settings.openrouter_api_key:
+            raise LLMConfigurationError(
+                "MAIL_AGENT_OPENROUTER_API_KEY environment variable is required "
+                "when using OpenRouter provider. Get your key from: https://openrouter.ai/keys"
+            )
+
+        model_name = self._settings.openrouter_model
+
+        logger.debug(f"Initializing OpenRouter with model: {model_name}")
+
+        # Build optional headers for OpenRouter rankings
+        default_headers = {}
+        if self._settings.openrouter_site_url:
+            default_headers["HTTP-Referer"] = self._settings.openrouter_site_url
+        if self._settings.openrouter_app_name:
+            default_headers["X-Title"] = self._settings.openrouter_app_name
+
+        model = ChatOpenAI(
+            model=model_name,
+            openai_api_key=self._settings.openrouter_api_key,
+            openai_api_base="https://openrouter.ai/api/v1",
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            default_headers=default_headers if default_headers else None,
+        )
+
+        logger.info(f"OpenRouter model initialized: {model_name}")
         return model, model_name
 
     async def generate(

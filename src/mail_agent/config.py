@@ -22,6 +22,7 @@ class LLMProvider(str, Enum):
 
     GEMINI = "gemini"
     AZURE_OPENAI = "azure-openai"
+    OPENROUTER = "openrouter"
 
 
 class Settings(BaseSettings):
@@ -81,7 +82,7 @@ class Settings(BaseSettings):
     # LLM Configuration
     llm_provider: LLMProvider = Field(
         default=LLMProvider.GEMINI,
-        description="LLM provider to use: 'gemini' or 'azure-openai'",
+        description="LLM provider to use: 'gemini', 'azure-openai', or 'openrouter'",
     )
 
     # Google Gemini Configuration
@@ -110,6 +111,24 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = Field(
         default="2024-02-15-preview",
         description="Azure OpenAI API version",
+    )
+
+    # OpenRouter Configuration
+    openrouter_api_key: Optional[str] = Field(
+        default=None,
+        description="OpenRouter API key (required when llm_provider=openrouter)",
+    )
+    openrouter_model: str = Field(
+        default="anthropic/claude-3.5-sonnet",
+        description="OpenRouter model name in format 'provider/model' (e.g., 'anthropic/claude-3.5-sonnet')",
+    )
+    openrouter_site_url: Optional[str] = Field(
+        default=None,
+        description="Optional site URL for OpenRouter rankings (https://openrouter.ai/docs#rankings)",
+    )
+    openrouter_app_name: Optional[str] = Field(
+        default=None,
+        description="Optional app name for OpenRouter rankings",
     )
 
     # Common LLM Settings
@@ -232,6 +251,12 @@ class Settings(BaseSettings):
             if missing:
                 logger.warning(
                     f"Azure OpenAI configuration incomplete. Missing: {', '.join(missing)}. "
+                    "LLM operations will fail until configured."
+                )
+        elif self.llm_provider == LLMProvider.OPENROUTER:
+            if not self.openrouter_api_key:
+                logger.warning(
+                    "MAIL_AGENT_OPENROUTER_API_KEY not set. "
                     "LLM operations will fail until configured."
                 )
         return self
