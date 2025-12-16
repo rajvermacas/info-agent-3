@@ -17,6 +17,7 @@ from ui.services.smtp_client import (
     InboxNotFoundError,
     SMTPClientError,
 )
+from ui.services.smtp_sender import SMTPSendError
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +277,10 @@ async def send_reply(
     attachment: Annotated[UploadFile | None, File()] = None,
 ) -> HTMLResponse:
     """
-    Send a reply email with optional attachment.
+    Send a reply email with optional attachment via SMTP.
+
+    Uses SMTP protocol to send the email (like poc_reply_simulator.py),
+    which properly handles attachments through MIME encoding.
 
     Args:
         from_address: Sender email address.
@@ -287,39 +291,43 @@ async def send_reply(
 
     Returns HTML partial with result.
     """
-    logger.info("Sending reply from %s to %s: %s", from_address, to_address, subject)
+    logger.info("Sending reply via SMTP from %s to %s: %s", from_address, to_address, subject)
     resources = get_resources()
 
     try:
-        # Prepare attachments
-        attachments = None
+        # Prepare attachment if provided
+        attachment_data = None
         if attachment and attachment.filename:
             content = await attachment.read()
             content_type = attachment.content_type or "application/octet-stream"
-            attachments = [(attachment.filename, content_type, content)]
-            logger.info("Reply includes attachment: %s (%d bytes)", attachment.filename, len(content))
+            attachment_data = (attachment.filename, content_type, content)
+            logger.info(
+                "Reply includes attachment: %s (%s, %d bytes)",
+                attachment.filename,
+                content_type,
+                len(content),
+            )
 
-        # Send the email
-        email_id = await resources.smtp_client.send_email(
+        # Send the email via SMTP
+        await resources.smtp_sender.send_email(
             from_address=from_address,
             to_addresses=[to_address],
             subject=subject,
             body=body,
-            attachments=attachments,
+            attachment=attachment_data,
         )
 
-        logger.info("Reply sent successfully: %s", email_id)
+        logger.info("Reply sent successfully via SMTP to %s", to_address)
 
         return resources.templates.TemplateResponse(
             "partials/reply_sent.html",
             {
                 "request": request,
-                "email_id": email_id,
                 "to_address": to_address,
                 "success": True,
             },
         )
-    except SMTPClientError as e:
+    except SMTPSendError as e:
         logger.error("SMTP error sending reply: %s", e)
         return resources.templates.TemplateResponse(
             "partials/reply_sent.html",

@@ -240,15 +240,27 @@ class SMTPClientService:
             response.raise_for_status()
             data = response.json()
 
+            # Parse attachments from API response
+            raw_attachments = data.get("attachments", [])
+            logger.debug(
+                "API response contains %d attachments in data",
+                len(raw_attachments),
+            )
+
             attachments = []
-            for att_data in data.get("attachments", []):
-                attachments.append(
-                    Attachment(
-                        filename=att_data.get("filename", ""),
-                        content_type=att_data.get("content_type", "application/octet-stream"),
-                        content_base64=att_data.get("content_base64", ""),
-                        size_bytes=att_data.get("size_bytes", 0),
-                    )
+            for att_data in raw_attachments:
+                att = Attachment(
+                    filename=att_data.get("filename", ""),
+                    content_type=att_data.get("content_type", "application/octet-stream"),
+                    content_base64=att_data.get("content_base64", ""),
+                    size_bytes=att_data.get("size_bytes", 0),
+                )
+                attachments.append(att)
+                logger.debug(
+                    "Parsed attachment: %s (%s, %d bytes)",
+                    att.filename,
+                    att.content_type,
+                    att.size_bytes,
                 )
 
             email = Email(
@@ -263,7 +275,12 @@ class SMTPClientService:
                 has_attachments=len(attachments) > 0,
             )
 
-            logger.info("Retrieved email: %s", email.subject)
+            logger.info(
+                "Retrieved email: %s (has_attachments=%s, attachment_count=%d)",
+                email.subject,
+                email.has_attachments,
+                len(email.attachments),
+            )
             return email
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

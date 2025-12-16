@@ -52,6 +52,18 @@ class Settings(BaseSettings):
         description="Default inbox email address to display",
     )
 
+    # SMTP server settings (for sending emails via SMTP protocol)
+    smtp_host: str = Field(
+        default="localhost",
+        description="SMTP server hostname for sending emails",
+    )
+    smtp_port: int = Field(
+        default=1025,
+        description="SMTP server port for sending emails",
+        ge=1,
+        le=65535,
+    )
+
     # HTTP client settings
     http_timeout_seconds: float = Field(
         default=30.0,
@@ -113,6 +125,7 @@ def get_settings() -> Settings:
     logger.info("  Port: %d", settings.port)
     logger.info("  A2A Server URL: %s", settings.a2a_server_url)
     logger.info("  Mock SMTP API URL: %s", settings.mock_smtp_api_url)
+    logger.info("  SMTP Server: %s:%d", settings.smtp_host, settings.smtp_port)
     logger.info("  Default Inbox: %s", settings.default_inbox_email)
     logger.info("  Log Level: %s", settings.log_level)
     return settings

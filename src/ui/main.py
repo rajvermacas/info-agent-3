@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from ui.config import Settings, configure_logging, get_settings
 from ui.services.a2a_client import A2AClientService
 from ui.services.smtp_client import SMTPClientService
+from ui.services.smtp_sender import SMTPSenderService
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,13 @@ class UIServerResources:
         settings: Settings,
         a2a_client: A2AClientService,
         smtp_client: SMTPClientService,
+        smtp_sender: SMTPSenderService,
         templates: Jinja2Templates,
     ):
         self.settings = settings
         self.a2a_client = a2a_client
         self.smtp_client = smtp_client
+        self.smtp_sender = smtp_sender
         self.templates = templates
 
 
@@ -68,10 +71,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting UI Server...")
     logger.info("  A2A Server: %s", settings.a2a_server_url)
     logger.info("  Mock SMTP API: %s", settings.mock_smtp_api_url)
+    logger.info("  SMTP Server: %s:%d", settings.smtp_host, settings.smtp_port)
 
     # Create service clients
     a2a_client = A2AClientService(settings)
     smtp_client = SMTPClientService(settings)
+    smtp_sender = SMTPSenderService(settings)
 
     # Create templates
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -81,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings=settings,
         a2a_client=a2a_client,
         smtp_client=smtp_client,
+        smtp_sender=smtp_sender,
         templates=templates,
     )
 
