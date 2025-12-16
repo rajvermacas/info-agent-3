@@ -23,7 +23,8 @@ Autonomous email interaction system with Mock SMTP server, LangGraph-powered mai
 - **Web Interface** - HTMX + Tailwind CSS
 - **Send Requests** - Submit tasks via web form
 - **Inbox Management** - View emails, download attachments, send replies
-- **Task Dashboard** - Real-time task monitoring with SSE
+- **Task Dashboard** - Real-time task monitoring with Server-Sent Events (SSE)
+- **Live Progress Updates** - Stream agent activity as it happens
 
 ## Quick Start
 
@@ -140,6 +141,12 @@ task_id = response.json()["result"]["task_id"]
 
 # Check status
 status = requests.get(f"http://localhost:8000/api/tasks/{task_id}")
+
+# Stream progress (SSE)
+import sseclient
+progress_stream = sseclient.SSEClient(f"http://localhost:8000/api/tasks/{task_id}/progress")
+for event in progress_stream:
+    print(event.data)
 ```
 
 ### Simulating POC Replies
@@ -159,11 +166,17 @@ uv run python scripts/poc_reply_simulator.py \
 ### Mock SMTP Server (Port 8025)
 
 ```bash
+# Health check
+curl http://localhost:8025/api/health
+
 # List inboxes
 curl http://localhost:8025/api/inboxes
 
 # Get inbox emails
-curl http://localhost:8025/api/inboxes/info-agent@gmail.com
+curl http://localhost:8025/api/inboxes/info-agent@gmail.com/emails
+
+# Get email details
+curl http://localhost:8025/api/emails/{email_id}
 
 # Send email
 curl -X POST http://localhost:8025/api/send \
@@ -180,9 +193,6 @@ curl -X POST http://localhost:8025/api/webhooks \
   -H "Content-Type: application/json" \
   -d '{"url": "http://localhost:9000/webhook/email-received"}'
 
-# Health check
-curl http://localhost:8025/api/health
-
 # Swagger UI
 open http://localhost:8025/docs
 ```
@@ -198,30 +208,51 @@ curl http://localhost:8000/api/tasks
 
 # Get task status
 curl http://localhost:8000/api/tasks/{task_id}
+
+# Stream progress (SSE)
+curl -N http://localhost:8000/api/tasks/{task_id}/progress
 ```
 
 ## Architecture
 
 ### Four-Server System
 
-1. **Mock SMTP Server** (Ports 1025, 8025)
+1. **Mock SMTP Server** (Ports 1025 SMTP, 8025 API)
    - SMTP protocol + REST API
    - In-memory email storage
-   - Webhook notifications
+   - Webhook notifications for email arrivals
 
 2. **Mail Agent A2A Server** (Port 8000)
-   - JSON-RPC 2.0 endpoint
+   - JSON-RPC 2.0 endpoint (A2A protocol)
    - LangGraph agent execution
-   - Task management
+   - Task management with persistence
+   - Real-time progress streaming (SSE)
 
 3. **Mail Agent Webhook Server** (Port 9000)
    - Email arrival notifications
    - Task resumption triggers
+   - Async webhook processing
 
 4. **UI Server** (Port 8080)
-   - Web interface
+   - HTMX + Tailwind CSS web interface
    - Task submission and monitoring
    - Inbox management
+   - Live progress updates via SSE
+
+### Data Flow
+
+```
+┌─────────┐  HTTP   ┌──────────┐  JSON-RPC  ┌──────────────┐
+│ Browser │◄───────►│ UI Server│◄──────────►│ A2A Server   │
+└─────────┘  SSE    └──────────┘            │ (Port 8000)  │
+                          │                 └───────┬──────┘
+                          │ REST API                │ REST
+                          ▼                         ▼
+                    ┌────────────┐          ┌──────────────┐
+                    │ Mock SMTP  │──────────►│ Webhook      │
+                    │ (8025/1025)│  HTTP     │ (Port 9000)  │
+                    └────────────┘  POST     └──────────────┘
+```
 
 ### Mail Agent Workflow
 
@@ -235,7 +266,7 @@ Compose (LLM generates email)
 Send (via Mock SMTP)
      ↓
 Wait for Reply (interrupt, webhook-triggered resume)
-     ↓
+     ↓ [Email arrives → Webhook → Resume]
 Fetch (retrieve email)
      ↓
 Extract (parse CSV/Excel attachments)
@@ -341,8 +372,6 @@ Contributions welcome! Please ensure:
 
 - **README.md** (this file) - User documentation
 - **CLAUDE.md** - Developer quick reference
-- **.dev-resources/architecture/** - Detailed architecture docs
-- **.dev-resources/contracts/** - API contracts
 
 # Execution steps:
 ## mock smtp
