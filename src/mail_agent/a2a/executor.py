@@ -209,13 +209,15 @@ class MailAgentA2AExecutor(AgentExecutor):
         config = {"configurable": {"thread_id": task_id}}
         final_state: Optional[dict[str, Any]] = None
 
-        # Emit initial working event
+        # Emit initial working event with task_id for UI extraction
+        # The A2A SDK returns the FIRST message as JSON-RPC response,
+        # so we include task_id here for the UI to extract immediately
         await self._emit_sse_event(
             event_queue,
             SSEEvent(
                 task_id=task_id,
                 state=TaskState.WORKING,
-                message="Starting task execution...",
+                message=f"Starting task execution. Poll GET /tasks/{task_id} for status.",
                 node="start",
             ),
         )

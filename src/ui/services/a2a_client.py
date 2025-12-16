@@ -208,23 +208,20 @@ class A2AClientService:
                     # Extract task_id from message text content
                     # Message format: "[suspended] Waiting for reply from {poc}. Poll GET /tasks/{task_id} for result."
                     parts = result.get("parts", [])
-                    for part in parts:
-                        if isinstance(part, dict):
-                            text = part.get("text", "")
-                            # Handle nested Part structure
-                            if "root" in part:
-                                root = part.get("root", {})
-                                if isinstance(root, dict):
-                                    text = root.get("text", "")
-                        else:
-                            text = ""
+                    logger.debug("Parsing message parts for task_id: %s", parts)
 
-                        # Look for task_id in "Poll GET /tasks/{task_id}" pattern
-                        match = re.search(r'/tasks/([a-f0-9-]+)', text)
-                        if match:
-                            task_id = match.group(1)
-                            logger.debug("Extracted task_id from message text: %s", task_id)
-                            break
+                    for part in parts:
+                        text = self._extract_text_from_part(part)
+
+                        if text:
+                            logger.debug("Extracted text from part: %s", text[:200] if len(text) > 200 else text)
+                            # Look for task_id in "Poll GET /tasks/{task_id}" pattern
+                            # Pattern matches any alphanumeric task_id with dashes (not just hex a-f)
+                            match = re.search(r'/tasks/([a-zA-Z0-9-]+)', text)
+                            if match:
+                                task_id = match.group(1)
+                                logger.info("Extracted task_id from message text: %s", task_id)
+                                break
 
                     # Extract state from message text prefix
                     parts_str = str(parts)
@@ -368,3 +365,50 @@ class A2AClientService:
         except Exception as e:
             logger.warning("A2A health check failed: %s", e)
             return False
+
+    def _extract_text_from_part(self, part: Any) -> str:
+        """
+        Extract text content from an A2A message part.
+
+        Handles various Part structures:
+        1. Direct dict with "text" key
+        2. Dict with nested "root" containing "text"
+        3. Object with .text attribute
+        4. Object with .root.text attribute
+
+        Args:
+            part: A message part from the A2A response.
+
+        Returns:
+            The extracted text, or empty string if not found.
+        """
+        if part is None:
+            return ""
+
+        # Case 1: Direct dict with "text" key
+        if isinstance(part, dict):
+            # Try direct text field first
+            text = part.get("text", "")
+            if text:
+                return text
+
+            # Try nested "root" structure
+            root = part.get("root")
+            if isinstance(root, dict):
+                return root.get("text", "")
+            elif root is not None and hasattr(root, "text"):
+                return root.text or ""
+
+            return ""
+
+        # Case 2: Object with .text attribute (TextPart)
+        if hasattr(part, "text") and part.text:
+            return part.text
+
+        # Case 3: Object with .root.text attribute (Part wrapper)
+        if hasattr(part, "root"):
+            root = part.root
+            if hasattr(root, "text") and root.text:
+                return root.text
+
+        return ""

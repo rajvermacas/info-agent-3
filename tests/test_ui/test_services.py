@@ -194,6 +194,47 @@ class TestA2AClientService:
             await client.close()
 
     @pytest.mark.asyncio
+    async def test_send_task_message_response_with_non_hex_task_id(self, settings: Settings) -> None:
+        """Test parsing Message response with non-hex characters in task_id.
+
+        Task IDs may contain letters beyond hex range (g-z), ensuring regex
+        pattern [a-zA-Z0-9-] correctly captures the full ID.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "kind": "message",
+                "messageId": "msg-xyz-789",
+                "role": "agent",
+                "parts": [
+                    {
+                        "text": "[suspended] Waiting for reply from test@example.com. Poll GET /tasks/abc123-ghijkl-xyz789 for result.",
+                    }
+                ],
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = A2AClientService(settings)
+            result = await client.send_task("Send mail to test@example.com")
+
+            assert isinstance(result, TaskInfo)
+            # Task ID contains g, h, i, j, k, l, x, y, z - all outside hex range
+            assert result.task_id == "abc123-ghijkl-xyz789"
+            assert result.state == "suspended"
+
+            await client.close()
+
+    @pytest.mark.asyncio
     async def test_send_task_message_response_without_task_id(self, settings: Settings) -> None:
         """Test parsing Message response without task_id in text.
 
@@ -287,6 +328,101 @@ class TestA2AClientService:
             result = await client.get_task_status("test-task-123")
 
             assert result.state == "unknown"
+
+            await client.close()
+
+    def test_extract_text_from_part_direct_dict(self, settings: Settings) -> None:
+        """Test _extract_text_from_part with direct dict containing text."""
+        client = A2AClientService(settings)
+
+        # Direct dict with text key
+        part = {"text": "Hello world"}
+        assert client._extract_text_from_part(part) == "Hello world"
+
+    def test_extract_text_from_part_nested_root_dict(self, settings: Settings) -> None:
+        """Test _extract_text_from_part with nested root structure (dict)."""
+        client = A2AClientService(settings)
+
+        # Nested root structure (common in A2A SDK responses)
+        part = {"root": {"text": "[suspended] Waiting for reply. Poll GET /tasks/abc-123"}}
+        assert client._extract_text_from_part(part) == "[suspended] Waiting for reply. Poll GET /tasks/abc-123"
+
+    def test_extract_text_from_part_empty_cases(self, settings: Settings) -> None:
+        """Test _extract_text_from_part with various empty/None cases."""
+        client = A2AClientService(settings)
+
+        # None
+        assert client._extract_text_from_part(None) == ""
+
+        # Empty dict
+        assert client._extract_text_from_part({}) == ""
+
+        # Dict with empty text
+        assert client._extract_text_from_part({"text": ""}) == ""
+
+        # Dict with empty root
+        assert client._extract_text_from_part({"root": {}}) == ""
+
+    def test_extract_text_from_part_object_with_text_attr(self, settings: Settings) -> None:
+        """Test _extract_text_from_part with object having .text attribute."""
+        client = A2AClientService(settings)
+
+        # Mock object with .text attribute (like TextPart)
+        mock_part = MagicMock()
+        mock_part.text = "Text from attribute"
+        assert client._extract_text_from_part(mock_part) == "Text from attribute"
+
+    def test_extract_text_from_part_object_with_root_text(self, settings: Settings) -> None:
+        """Test _extract_text_from_part with object having .root.text attribute."""
+        client = A2AClientService(settings)
+
+        # Mock object with .root.text attribute (like Part wrapper)
+        mock_root = MagicMock()
+        mock_root.text = "Text from root"
+        mock_part = MagicMock()
+        mock_part.text = None  # Direct text is None
+        mock_part.root = mock_root
+        assert client._extract_text_from_part(mock_part) == "Text from root"
+
+    @pytest.mark.asyncio
+    async def test_send_task_message_response_with_nested_root(self, settings: Settings) -> None:
+        """Test parsing Message response with nested root structure.
+
+        The A2A SDK may return parts with nested 'root' structure containing text.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "kind": "message",
+                "messageId": "msg-xyz-456",
+                "role": "agent",
+                "parts": [
+                    {
+                        "root": {
+                            "text": "[suspended] Waiting for reply from test@example.com. Poll GET /tasks/ABCD1234-EF56-7890-AB12-CDEF34567890 for result."
+                        }
+                    }
+                ],
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = A2AClientService(settings)
+            result = await client.send_task("Send mail to test@example.com")
+
+            assert isinstance(result, TaskInfo)
+            # UUID with uppercase hex letters (valid hex: 0-9, a-f, A-F)
+            assert result.task_id == "ABCD1234-EF56-7890-AB12-CDEF34567890"
+            assert result.state == "suspended"
 
             await client.close()
 
