@@ -25,7 +25,8 @@ from a2a.server.tasks import InMemoryTaskStore
 
 from mail_agent.a2a.agent_card import create_agent_card
 from mail_agent.a2a.executor import MailAgentA2AExecutor
-from mail_agent.a2a.routes import create_tasks_router
+from mail_agent.a2a.progress_store import ProgressStore
+from mail_agent.a2a.routes import create_tasks_router, create_progress_router
 from mail_agent.agent.graph import compile_mail_agent_graph
 from mail_agent.agent.nodes.wait_for_reply import set_a2a_mode, set_webhook_server
 from mail_agent.config import Settings, get_settings, configure_logging
@@ -51,6 +52,7 @@ class A2AServerResources:
         task_manager: TaskManager,
         webhook_server: WebhookServer,
         db_manager: DatabaseManager,
+        progress_store: ProgressStore,
     ) -> None:
         """
         Initialize resource container.
@@ -60,11 +62,13 @@ class A2AServerResources:
             task_manager: TaskManager for task lifecycle.
             webhook_server: WebhookServer for email notifications.
             db_manager: DatabaseManager for persistence.
+            progress_store: ProgressStore for progress event streaming.
         """
         self.app = app
         self.task_manager = task_manager
         self.webhook_server = webhook_server
         self.db_manager = db_manager
+        self.progress_store = progress_store
 
 
 async def create_a2a_application(
@@ -128,14 +132,19 @@ async def create_a2a_application(
     agent_card = create_agent_card(settings)
     logger.info(f"Agent card created: {agent_card.name} v{agent_card.version}")
 
-    # 8. Create executor with TaskManager
+    # 8. Create ProgressStore for real-time progress streaming
+    progress_store = ProgressStore(cleanup_delay_seconds=300.0)
+    logger.info("ProgressStore created for SSE streaming")
+
+    # 9. Create executor with TaskManager and ProgressStore
     executor = MailAgentA2AExecutor(
         graph=graph,
         task_manager=task_manager,
+        progress_store=progress_store,
     )
-    logger.info("A2A executor created (non-blocking)")
+    logger.info("A2A executor created (non-blocking with progress store)")
 
-    # 9. Create request handler with in-memory task store
+    # 10. Create request handler with in-memory task store
     a2a_task_store = InMemoryTaskStore()
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
@@ -143,7 +152,7 @@ async def create_a2a_application(
     )
     logger.info("Request handler created")
 
-    # 10. Build A2A Starlette application
+    # 11. Build A2A Starlette application
     app_builder = A2AStarletteApplication(
         agent_card=agent_card,
         http_handler=request_handler,
@@ -151,23 +160,26 @@ async def create_a2a_application(
     app = app_builder.build()
     logger.info("A2A Starlette application built")
 
-    # 11. Mount task routes as FastAPI sub-application
+    # 12. Mount task and progress routes as FastAPI sub-application
     # FastAPI routes need FastAPI's dependency injection and routing,
     # so we mount a FastAPI app instead of converting routes manually.
     tasks_router = create_tasks_router(task_manager)
+    progress_router = create_progress_router(progress_store)
     from fastapi import FastAPI as TaskFastAPI
     from starlette.routing import Mount
     task_app = TaskFastAPI()
     task_app.include_router(tasks_router)
-    # Mount at /api so routes become /api/tasks and /api/tasks/{task_id}
+    task_app.include_router(progress_router)
+    # Mount at /api so routes become /api/tasks, /api/tasks/{task_id}, /api/tasks/{task_id}/progress
     app.routes.append(Mount("/api", app=task_app))
-    logger.info("Task routes mounted at /api/tasks")
+    logger.info("Task and progress routes mounted at /api/tasks")
 
     return A2AServerResources(
         app=app,
         task_manager=task_manager,
         webhook_server=webhook_server,
         db_manager=db_manager,
+        progress_store=progress_store,
     )
 
 
@@ -306,6 +318,10 @@ async def run_a2a_server(
                 # Stop TaskManager
                 await resources.task_manager.stop()
                 logger.info("TaskManager stopped")
+
+                # Cleanup ProgressStore
+                await resources.progress_store.cleanup()
+                logger.info("ProgressStore cleaned up")
 
                 # Stop webhook server
                 await resources.webhook_server.stop()

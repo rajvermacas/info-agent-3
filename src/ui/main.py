@@ -19,6 +19,7 @@ from ui.config import Settings, configure_logging, get_settings
 from ui.services.a2a_client import A2AClientService
 from ui.services.smtp_client import SMTPClientService
 from ui.services.smtp_sender import SMTPSenderService
+from ui.services.sse_client import SSEClientService
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +37,14 @@ class UIServerResources:
         a2a_client: A2AClientService,
         smtp_client: SMTPClientService,
         smtp_sender: SMTPSenderService,
+        sse_client: SSEClientService,
         templates: Jinja2Templates,
     ):
         self.settings = settings
         self.a2a_client = a2a_client
         self.smtp_client = smtp_client
         self.smtp_sender = smtp_sender
+        self.sse_client = sse_client
         self.templates = templates
 
 
@@ -77,6 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     a2a_client = A2AClientService(settings)
     smtp_client = SMTPClientService(settings)
     smtp_sender = SMTPSenderService(settings)
+    sse_client = SSEClientService(settings)
 
     # Create templates
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -87,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         a2a_client=a2a_client,
         smtp_client=smtp_client,
         smtp_sender=smtp_sender,
+        sse_client=sse_client,
         templates=templates,
     )
 
@@ -126,11 +131,21 @@ def create_app() -> FastAPI:
     from ui.routes.send_request import router as send_request_router
     from ui.routes.inbox import router as inbox_router
     from ui.routes.dashboard import router as dashboard_router
+    from ui.routes.sse import create_sse_router
 
     app.include_router(pages_router)
     app.include_router(send_request_router, prefix="/api")
     app.include_router(inbox_router, prefix="/api")
     app.include_router(dashboard_router, prefix="/api")
+
+    # Create SSE client and router during app creation (not in lifespan)
+    # This ensures routes are registered BEFORE the app starts
+    # FastAPI compiles its routing table during create_app(), NOT during startup events
+    settings = get_settings()
+    sse_client = SSEClientService(settings)
+    sse_router = create_sse_router(settings, sse_client)
+    app.include_router(sse_router)
+    logger.info("SSE router registered at /api/sse")
 
     @app.get("/health")
     async def health_check() -> dict:

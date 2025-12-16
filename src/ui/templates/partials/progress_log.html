@@ -1,0 +1,162 @@
+{# Progress Log Component - Real-time task progress display #}
+{#
+    Required variables:
+    - task_id: The task identifier for SSE subscription
+
+    Optional variables:
+    - show_header: Whether to show the header (default: true)
+    - max_height: Max height class (default: "max-h-96")
+    - auto_connect: Whether to auto-connect SSE on load (default: true)
+#}
+
+{% set show_header = show_header | default(true) %}
+{% set max_height = max_height | default("max-h-96") %}
+{% set auto_connect = auto_connect | default(true) %}
+
+<div id="progress-container-{{ task_id }}" class="bg-white rounded-lg shadow">
+    {% if show_header %}
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+            <h4 class="text-sm font-medium text-gray-900">Agent Activity</h4>
+            <span id="sse-status-{{ task_id }}" class="text-xs text-gray-400">
+                Connecting...
+            </span>
+        </div>
+        <div class="flex items-center space-x-2">
+            <span id="progress-state-{{ task_id }}" class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                Starting
+            </span>
+        </div>
+    </div>
+    {% endif %}
+
+    {# Progress log entries container #}
+    <div id="progress-log-{{ task_id }}"
+         class="{{ max_height }} overflow-y-auto p-4 space-y-2 bg-gray-50">
+        {# Progress entries will be appended here by JavaScript #}
+        <div class="text-center text-gray-400 text-sm py-4" id="progress-placeholder-{{ task_id }}">
+            <svg class="animate-spin h-5 w-5 mx-auto mb-2 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Waiting for agent activity...
+        </div>
+    </div>
+
+    {# Final result section (shown on completion/failure) #}
+    <div id="progress-result-{{ task_id }}" class="hidden px-4 py-3 border-t border-gray-200">
+        {# Result content inserted by JavaScript #}
+    </div>
+</div>
+
+{% if auto_connect %}
+<script>
+(function() {
+    const taskId = "{{ task_id }}";
+    const containerId = "progress-log-" + taskId;
+    const placeholderId = "progress-placeholder-" + taskId;
+    const statusId = "sse-status-" + taskId;
+    const stateId = "progress-state-" + taskId;
+    const resultId = "progress-result-" + taskId;
+
+    // Remove placeholder on first event
+    let placeholderRemoved = false;
+    function removePlaceholder() {
+        if (!placeholderRemoved) {
+            const placeholder = document.getElementById(placeholderId);
+            if (placeholder) {
+                placeholder.remove();
+            }
+            placeholderRemoved = true;
+        }
+    }
+
+    // Update status badge
+    function updateStatus(connected) {
+        const statusEl = document.getElementById(statusId);
+        if (statusEl) {
+            if (connected) {
+                statusEl.textContent = "Live";
+                statusEl.className = "text-xs text-green-600 flex items-center";
+                statusEl.innerHTML = '<span class="w-2 h-2 bg-green-400 rounded-full mr-1 animate-pulse"></span>Live';
+            } else {
+                statusEl.textContent = "Disconnected";
+                statusEl.className = "text-xs text-gray-400";
+            }
+        }
+    }
+
+    // Update state badge
+    function updateState(state) {
+        const stateEl = document.getElementById(stateId);
+        if (!stateEl) return;
+
+        const stateConfig = {
+            'created': { label: 'Created', bg: 'bg-gray-100', text: 'text-gray-800' },
+            'working': { label: 'Working', bg: 'bg-blue-100', text: 'text-blue-800' },
+            'suspended': { label: 'Waiting for Reply', bg: 'bg-yellow-100', text: 'text-yellow-800' },
+            'resumed': { label: 'Resumed', bg: 'bg-blue-100', text: 'text-blue-800' },
+            'completed': { label: 'Completed', bg: 'bg-green-100', text: 'text-green-800' },
+            'failed': { label: 'Failed', bg: 'bg-red-100', text: 'text-red-800' },
+        };
+
+        const config = stateConfig[state] || { label: state, bg: 'bg-gray-100', text: 'text-gray-800' };
+        stateEl.textContent = config.label;
+        stateEl.className = `inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${config.bg} ${config.text}`;
+    }
+
+    // Show result section
+    function showResult(data, isSuccess) {
+        const resultEl = document.getElementById(resultId);
+        if (!resultEl) return;
+
+        resultEl.classList.remove('hidden');
+
+        if (isSuccess) {
+            resultEl.innerHTML = `
+                <div class="flex items-center text-green-700">
+                    <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    <span class="font-medium">Task completed successfully</span>
+                </div>
+            `;
+        } else {
+            resultEl.innerHTML = `
+                <div class="flex items-center text-red-700">
+                    <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                    </svg>
+                    <span class="font-medium">${data.error || data.message || 'Task failed'}</span>
+                </div>
+            `;
+        }
+    }
+
+    // Initialize progress stream
+    const stream = new TaskProgressStream(taskId, containerId, {
+        onEvent: function(data, eventType) {
+            removePlaceholder();
+            updateStatus(true);
+            updateState(data.state);
+        },
+        onComplete: function(data) {
+            updateStatus(false);
+            showResult(data, true);
+        },
+        onError: function(error) {
+            updateStatus(false);
+            showResult({ error: error.message }, false);
+        },
+        onSuspended: function(data) {
+            // Keep connection open for suspended state
+        }
+    });
+
+    stream.connect();
+
+    // Store reference for cleanup
+    window['progressStream_' + taskId] = stream;
+})();
+</script>
+{% endif %}

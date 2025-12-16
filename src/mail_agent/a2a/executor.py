@@ -6,6 +6,7 @@ Handles:
 - Streaming SSE progress events during execution
 - Detecting interrupts and triggering task suspension
 - Converting agent responses back to A2A format
+- Emitting progress events to ProgressStore for UI streaming
 """
 
 import logging
@@ -18,6 +19,7 @@ from a2a.types import Message, Part, Role, TextPart
 from langgraph.graph.state import CompiledStateGraph
 
 from mail_agent.agent.state import create_initial_state
+from mail_agent.a2a.progress_store import ProgressStore, ProgressEvent
 from mail_agent.task_manager import TaskManager, TaskState
 from mail_agent.task_manager.models import SSEEvent
 
@@ -35,16 +37,19 @@ class MailAgentA2AExecutor(AgentExecutor):
     3. Detects interrupt points and suspends tasks
     4. Emits SSE events for progress, suspension, and completion
     5. Converts the agent's response to A2A format
+    6. Emits progress events to ProgressStore for UI streaming
 
     Attributes:
         graph: The compiled LangGraph state graph for the mail agent.
         task_manager: TaskManager for handling suspension and resumption.
+        progress_store: ProgressStore for emitting progress events to UI.
     """
 
     def __init__(
         self,
         graph: CompiledStateGraph,
         task_manager: TaskManager,
+        progress_store: ProgressStore,
     ) -> None:
         """
         Initialize the Mail Agent A2A Executor.
@@ -52,16 +57,20 @@ class MailAgentA2AExecutor(AgentExecutor):
         Args:
             graph: Compiled LangGraph state graph for the mail agent.
             task_manager: TaskManager for task lifecycle management.
+            progress_store: ProgressStore for emitting progress events to UI.
         """
         if graph is None:
             raise ValueError("graph cannot be None")
         if task_manager is None:
             raise ValueError("task_manager cannot be None")
+        if progress_store is None:
+            raise ValueError("progress_store cannot be None")
 
         self.graph = graph
         self.task_manager = task_manager
+        self.progress_store = progress_store
 
-        logger.info("MailAgentA2AExecutor initialized (non-blocking mode)")
+        logger.info("MailAgentA2AExecutor initialized (non-blocking mode with progress store)")
 
     async def execute(
         self, context: RequestContext, event_queue: EventQueue
@@ -429,9 +438,10 @@ class MailAgentA2AExecutor(AgentExecutor):
         sse_event: SSEEvent,
     ) -> None:
         """
-        Emit an SSE event to the client.
+        Emit an SSE event to the client and progress store.
 
-        Converts SSEEvent to A2A Message format for the event queue.
+        Converts SSEEvent to A2A Message format for the event queue,
+        and also emits a ProgressEvent to the progress store for UI streaming.
 
         Args:
             event_queue: A2A event queue.
@@ -460,6 +470,22 @@ class MailAgentA2AExecutor(AgentExecutor):
         )
 
         await event_queue.enqueue_event(message)
+
+        # Also emit to progress store for UI streaming
+        progress_event = ProgressEvent(
+            task_id=sse_event.task_id,
+            state=sse_event.state,
+            node=sse_event.node,
+            message=sse_event.message,
+            poc_email=sse_event.poc_email,
+            result=sse_event.result,
+            error=sse_event.error,
+        )
+        await self.progress_store.add_event(progress_event)
+        logger.debug(
+            f"Progress event emitted to store: task_id={sse_event.task_id}, "
+            f"node={sse_event.node}, state={sse_event.state.value}"
+        )
 
     def _build_response_text(
         self, final_state: dict[str, Any], task_id: str

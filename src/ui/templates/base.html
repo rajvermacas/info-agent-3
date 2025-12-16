@@ -44,7 +44,23 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
+
+        /* Slide-in animation for progress entries */
+        .animate-fadeIn {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+
+        /* Node badge colors */
+        .bg-parse { background-color: #f3e8ff; color: #7e22ce; }
+        .bg-compose { background-color: #dbeafe; color: #1d4ed8; }
+        .bg-send { background-color: #dcfce7; color: #15803d; }
+        .bg-wait { background-color: #fef3c7; color: #b45309; }
+        .bg-fetch { background-color: #ffedd5; color: #c2410c; }
+        .bg-validate { background-color: #ccfbf1; color: #0f766e; }
     </style>
+
+    <!-- SSE Progress JavaScript -->
+    <script src="/static/js/sse-progress.js"></script>
 
     {% block extra_head %}{% endblock %}
 </head>

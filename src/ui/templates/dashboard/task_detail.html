@@ -75,6 +75,17 @@
             </dl>
         </div>
 
+        <!-- Progress Log Section (for non-terminal states) -->
+        {% if task.state not in ['completed', 'failed'] %}
+        <div class="mb-4">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Agent Activity</h4>
+            {% set task_id = task.task_id %}
+            {% set show_header = false %}
+            {% set max_height = "max-h-64" %}
+            {% include 'partials/progress_log.html' with context %}
+        </div>
+        {% endif %}
+
         <!-- Result Section -->
         {% if task.result %}
         <div class="mb-4">
@@ -91,20 +102,6 @@
             <h4 class="text-sm font-medium text-gray-700 mb-2">Error</h4>
             <div class="bg-red-50 rounded-md p-4">
                 <p class="text-sm text-red-800">{{ task.error }}</p>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Auto-refresh for non-terminal states -->
-        {% if task.state not in ['completed', 'failed'] %}
-        <div hx-get="/api/dashboard/task/{{ task.task_id }}/status"
-             hx-trigger="every 3s"
-             hx-swap="innerHTML"
-             id="auto-status-refresh"
-             class="mt-4">
-            <div class="flex items-center text-sm text-gray-500">
-                <div class="h-2 w-2 rounded-full bg-yellow-400 mr-2 pulse-loading"></div>
-                Auto-refreshing status...
             </div>
         </div>
         {% endif %}

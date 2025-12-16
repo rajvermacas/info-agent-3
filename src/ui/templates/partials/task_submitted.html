@@ -1,47 +1,43 @@
 {% if success %}
 <!-- Success Message -->
-<div class="bg-green-50 border border-green-200 rounded-lg p-4">
+<div class="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
     <div class="flex">
         <div class="flex-shrink-0">
             <svg class="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
             </svg>
         </div>
-        <div class="ml-3">
+        <div class="ml-3 flex-1">
             <h3 class="text-sm font-medium text-green-800">Task Submitted Successfully</h3>
             <div class="mt-2 text-sm text-green-700">
                 {% if task_id and task_id != 'None' and task_id != '' %}
-                <p><strong>Task ID:</strong> {{ task_id }}</p>
+                <p><strong>Task ID:</strong> <code class="bg-green-100 px-1 rounded">{{ task_id }}</code></p>
                 {% endif %}
                 <p><strong>Status:</strong> {{ state }}</p>
                 {% if message %}
                 <p><strong>Message:</strong> {{ message }}</p>
                 {% endif %}
             </div>
-            <div class="mt-4">
+            <div class="mt-3 flex items-center space-x-3">
                 <a href="/dashboard"
-                   class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                   class="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-green-700 bg-green-100 hover:bg-green-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
                     View in Dashboard &rarr;
                 </a>
+                {% if task_id and task_id != 'None' and task_id != '' %}
+                <a href="/inbox"
+                   class="inline-flex items-center px-3 py-1.5 border border-green-300 text-sm font-medium rounded-md text-green-700 bg-white hover:bg-green-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                    View Inbox
+                </a>
+                {% endif %}
             </div>
         </div>
     </div>
 </div>
 
 {% if task_id and task_id != 'None' and task_id != '' %}
-<!-- Auto-polling for task status (only if task_id is valid) -->
-<div id="task-status-poll"
-     hx-get="/api/dashboard/task/{{ task_id }}/status"
-     hx-trigger="every 3s"
-     hx-swap="innerHTML"
-     class="mt-4">
-    <div class="bg-white shadow rounded-lg p-4">
-        <div class="flex items-center">
-            <div class="h-3 w-3 rounded-full bg-yellow-400 mr-2 pulse-loading"></div>
-            <span class="text-sm text-gray-600">Monitoring task progress...</span>
-        </div>
-    </div>
-</div>
+<!-- Real-time Progress Log via SSE -->
+{% include 'partials/progress_log.html' with context %}
+
 {% else %}
 <!-- Fallback message when task_id is not available -->
 <div class="mt-4 bg-yellow-50 border border-yellow-200 rounded-lg p-4">

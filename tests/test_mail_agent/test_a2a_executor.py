@@ -16,6 +16,7 @@ from a2a.server.events import EventQueue
 from a2a.types import Message, Part, Role, TextPart
 
 from mail_agent.a2a.executor import MailAgentA2AExecutor
+from mail_agent.a2a.progress_store import ProgressStore
 from mail_agent.task_manager import TaskManager
 
 
@@ -67,14 +68,24 @@ def mock_task_manager() -> MagicMock:
 
 
 @pytest.fixture
+def mock_progress_store() -> MagicMock:
+    """Create a mock ProgressStore instance for testing."""
+    store = MagicMock(spec=ProgressStore)
+    store.add_event = AsyncMock()
+    return store
+
+
+@pytest.fixture
 def executor(
     mock_graph: MagicMock,
     mock_task_manager: MagicMock,
+    mock_progress_store: MagicMock,
 ) -> MailAgentA2AExecutor:
     """Create a MailAgentA2AExecutor instance for testing."""
     return MailAgentA2AExecutor(
         graph=mock_graph,
         task_manager=mock_task_manager,
+        progress_store=mock_progress_store,
     )
 
 
@@ -108,34 +119,49 @@ class TestInitialization:
     """Test executor initialization."""
 
     def test_init_with_valid_args(
-        self, mock_graph: MagicMock, mock_task_manager: MagicMock
+        self, mock_graph: MagicMock, mock_task_manager: MagicMock, mock_progress_store: MagicMock
     ) -> None:
         """Test initialization with valid arguments."""
         executor = MailAgentA2AExecutor(
             graph=mock_graph,
             task_manager=mock_task_manager,
+            progress_store=mock_progress_store,
         )
         assert executor.graph == mock_graph
         assert executor.task_manager == mock_task_manager
+        assert executor.progress_store == mock_progress_store
 
     def test_init_without_graph_raises(
-        self, mock_task_manager: MagicMock
+        self, mock_task_manager: MagicMock, mock_progress_store: MagicMock
     ) -> None:
         """Test that initialization without graph raises ValueError."""
         with pytest.raises(ValueError, match="graph cannot be None"):
             MailAgentA2AExecutor(
                 graph=None,
                 task_manager=mock_task_manager,
+                progress_store=mock_progress_store,
             )
 
     def test_init_without_task_manager_raises(
-        self, mock_graph: MagicMock
+        self, mock_graph: MagicMock, mock_progress_store: MagicMock
     ) -> None:
         """Test that initialization without task_manager raises ValueError."""
         with pytest.raises(ValueError, match="task_manager cannot be None"):
             MailAgentA2AExecutor(
                 graph=mock_graph,
                 task_manager=None,
+                progress_store=mock_progress_store,
+            )
+
+    def test_init_without_progress_store_raises(
+        self, mock_graph: MagicMock, mock_task_manager: MagicMock
+    ) -> None:
+        """Test that initialization without progress_store raises ValueError."""
+        with pytest.raises(ValueError, match="progress_store cannot be None"):
+            MailAgentA2AExecutor(
+                graph=mock_graph,
+                task_manager=mock_task_manager,
+                progress_store=None,
             )
 
 
@@ -318,6 +344,7 @@ class TestExecute:
     async def test_execute_with_graph_error(
         self,
         mock_task_manager: MagicMock,
+        mock_progress_store: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
@@ -334,6 +361,7 @@ class TestExecute:
         executor = MailAgentA2AExecutor(
             graph=graph,
             task_manager=mock_task_manager,
+            progress_store=mock_progress_store,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
@@ -352,6 +380,7 @@ class TestExecute:
     async def test_execute_sets_task_id_in_state(
         self,
         mock_task_manager: MagicMock,
+        mock_progress_store: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
@@ -369,6 +398,7 @@ class TestExecute:
         executor = MailAgentA2AExecutor(
             graph=graph,
             task_manager=mock_task_manager,
+            progress_store=mock_progress_store,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
@@ -411,6 +441,7 @@ class TestExecutorIntegration:
     async def test_executor_with_error_state(
         self,
         mock_task_manager: MagicMock,
+        mock_progress_store: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
@@ -430,6 +461,7 @@ class TestExecutorIntegration:
         executor = MailAgentA2AExecutor(
             graph=graph,
             task_manager=mock_task_manager,
+            progress_store=mock_progress_store,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
@@ -441,6 +473,7 @@ class TestExecutorIntegration:
     async def test_executor_with_multiple_node_outputs(
         self,
         mock_task_manager: MagicMock,
+        mock_progress_store: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
@@ -462,6 +495,7 @@ class TestExecutorIntegration:
         executor = MailAgentA2AExecutor(
             graph=graph,
             task_manager=mock_task_manager,
+            progress_store=mock_progress_store,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)
@@ -639,6 +673,7 @@ class TestInterruptDataExtraction:
     async def test_execute_with_interrupt_suspends_task(
         self,
         mock_task_manager: MagicMock,
+        mock_progress_store: MagicMock,
         mock_request_context: MagicMock,
         mock_event_queue: AsyncMock,
     ) -> None:
@@ -667,6 +702,7 @@ class TestInterruptDataExtraction:
         executor = MailAgentA2AExecutor(
             graph=graph,
             task_manager=mock_task_manager,
+            progress_store=mock_progress_store,
         )
 
         await executor.execute(mock_request_context, mock_event_queue)

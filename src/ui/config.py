@@ -76,6 +76,23 @@ class Settings(BaseSettings):
         gt=0,
     )
 
+    # SSE settings
+    sse_reconnect_max_retries: int = Field(
+        default=5,
+        description="Maximum SSE reconnection attempts",
+        ge=1,
+    )
+    sse_reconnect_initial_delay: float = Field(
+        default=1.0,
+        description="Initial delay between SSE reconnection attempts (seconds)",
+        gt=0,
+    )
+    sse_keepalive_interval: float = Field(
+        default=15.0,
+        description="Interval for SSE keepalive ping (seconds)",
+        gt=0,
+    )
+
     # Logging
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
         default="INFO",
