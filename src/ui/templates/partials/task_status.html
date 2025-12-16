@@ -1,0 +1,96 @@
+{% if task %}
+<div class="bg-white shadow rounded-lg p-4">
+    <div class="flex items-center justify-between">
+        <div class="flex items-center">
+            {% if task.state == 'completed' %}
+            <div class="h-3 w-3 rounded-full bg-green-400 mr-2"></div>
+            <span class="text-sm text-gray-600">Task completed</span>
+            {% elif task.state == 'failed' %}
+            <div class="h-3 w-3 rounded-full bg-red-400 mr-2"></div>
+            <span class="text-sm text-gray-600">Task failed</span>
+            {% elif task.state == 'suspended' %}
+            <div class="h-3 w-3 rounded-full bg-yellow-400 mr-2 pulse-loading"></div>
+            <span class="text-sm text-gray-600">Waiting for reply from {{ task.poc_email or 'POC' }}</span>
+            {% elif task.state == 'working' %}
+            <div class="h-3 w-3 rounded-full bg-blue-400 mr-2 pulse-loading"></div>
+            <span class="text-sm text-gray-600">Working...</span>
+            {% else %}
+            <div class="h-3 w-3 rounded-full bg-gray-400 mr-2"></div>
+            <span class="text-sm text-gray-600">{{ task.state }}</span>
+            {% endif %}
+        </div>
+        <div>
+            {% if task.state == 'completed' %}
+            <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+                completed
+            </span>
+            {% elif task.state == 'failed' %}
+            <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                failed
+            </span>
+            {% elif task.state == 'suspended' %}
+            <span class="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+                suspended
+            </span>
+            {% elif task.state == 'working' %}
+            <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                working
+            </span>
+            {% else %}
+            <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">
+                {{ task.state }}
+            </span>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if task.message %}
+    <p class="mt-2 text-sm text-gray-500">{{ task.message }}</p>
+    {% endif %}
+
+    <!-- Show result preview for completed tasks -->
+    {% if task.state == 'completed' and task.result %}
+    <div class="mt-3 p-3 bg-green-50 rounded-md">
+        <p class="text-sm font-medium text-green-800">Task completed successfully!</p>
+        <a href="/dashboard" class="text-sm text-green-600 hover:text-green-500 underline">
+            View full results in Dashboard
+        </a>
+    </div>
+    {% endif %}
+
+    <!-- Show error for failed tasks -->
+    {% if task.state == 'failed' and task.error %}
+    <div class="mt-3 p-3 bg-red-50 rounded-md">
+        <p class="text-sm text-red-800">{{ task.error }}</p>
+    </div>
+    {% endif %}
+
+    <!-- Show action for suspended tasks -->
+    {% if task.state == 'suspended' %}
+    <div class="mt-3 p-3 bg-yellow-50 rounded-md">
+        <p class="text-sm text-yellow-800">
+            The agent is waiting for a reply from {{ task.poc_email or 'the POC' }}.
+        </p>
+        <a href="/inbox" class="text-sm text-yellow-600 hover:text-yellow-500 underline">
+            Go to Inbox to send a reply
+        </a>
+    </div>
+    {% endif %}
+
+    <!-- Stop polling if terminal state -->
+    {% if task.state in ['completed', 'failed'] %}
+    <script>
+        // Stop polling by removing the hx-trigger from parent
+        document.getElementById('task-status-poll')?.removeAttribute('hx-trigger');
+    </script>
+    {% endif %}
+</div>
+{% elif error %}
+<div class="bg-red-50 border border-red-200 rounded-lg p-4">
+    <p class="text-sm text-red-800">{{ error }}</p>
+</div>
+{% else %}
+<div class="bg-gray-50 rounded-lg p-4">
+    <p class="text-sm text-gray-600">Unable to fetch task status.</p>
+</div>
+{% endif %}

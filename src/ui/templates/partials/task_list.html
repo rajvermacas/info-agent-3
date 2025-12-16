@@ -1,0 +1,99 @@
+{% if tasks %}
+<div class="overflow-hidden">
+    <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+            <tr>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Task ID
+                </th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                </th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    POC
+                </th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Created
+                </th>
+                <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                </th>
+            </tr>
+        </thead>
+        <tbody class="bg-white divide-y divide-gray-200">
+            {% for task in tasks %}
+            <tr class="hover:bg-gray-50">
+                <td class="px-4 py-4 whitespace-nowrap">
+                    <span class="text-sm font-mono text-gray-900">{{ task.task_id[:8] }}...</span>
+                </td>
+                <td class="px-4 py-4 whitespace-nowrap">
+                    {% if task.state == 'completed' %}
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+                        {{ task.state }}
+                    </span>
+                    {% elif task.state == 'failed' %}
+                    <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                        {{ task.state }}
+                    </span>
+                    {% elif task.state == 'suspended' %}
+                    <span class="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+                        {{ task.state }}
+                    </span>
+                    {% elif task.state == 'working' %}
+                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                        {{ task.state }}
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">
+                        {{ task.state }}
+                    </span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-4 whitespace-nowrap">
+                    {% if task.poc_email %}
+                    <span class="text-sm text-gray-900">{{ task.poc_email }}</span>
+                    {% else %}
+                    <span class="text-sm text-gray-400">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-4 whitespace-nowrap">
+                    {% if task.created_at %}
+                    <span class="text-sm text-gray-500">{{ task.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                    {% else %}
+                    <span class="text-sm text-gray-400">-</span>
+                    {% endif %}
+                </td>
+                <td class="px-4 py-4 whitespace-nowrap text-sm">
+                    <button
+                        type="button"
+                        onclick="showTaskDetail('{{ task.task_id }}')"
+                        class="text-indigo-600 hover:text-indigo-900"
+                    >
+                        View Details
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="text-center py-6">
+    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" />
+    </svg>
+    <h3 class="mt-2 text-sm font-medium text-gray-900">No tasks found</h3>
+    <p class="mt-1 text-sm text-gray-500">
+        Get started by sending a new mail request.
+    </p>
+    <div class="mt-4">
+        <a href="/send"
+           class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+            <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            New Task
+        </a>
+    </div>
+</div>
+{% endif %}

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Mail Agent UI{% endblock %}
+
+{% block page_title %}Task Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Controls -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-medium leading-6 text-gray-900">Task Monitor</h3>
+                    <p class="mt-1 text-sm text-gray-500">
+                        View and monitor Mail Agent task progress and results.
+                    </p>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button
+                        type="button"
+                        hx-get="/api/dashboard/tasks"
+                        hx-target="#task-list-container"
+                        hx-swap="innerHTML"
+                        class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                        <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                        </svg>
+                        Refresh
+                    </button>
+                    <a href="/send"
+                       class="inline-flex items-center px-3 py-2 border border-transparent shadow-sm text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                        </svg>
+                        New Task
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task List -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">Tasks</h3>
+            <div id="task-list-container"
+                 hx-get="/api/dashboard/tasks"
+                 hx-trigger="load, every 10s"
+                 hx-swap="innerHTML">
+                <div class="text-center py-4">
+                    <div class="animate-spin h-6 w-6 border-2 border-indigo-600 rounded-full border-t-transparent mx-auto"></div>
+                    <p class="text-sm text-gray-500 mt-2">Loading tasks...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Detail Container -->
+    <div id="task-detail-container" class="hidden">
+        <!-- Task detail will be loaded here -->
+    </div>
+
+    <!-- Legend -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h4 class="text-sm font-medium text-gray-700 mb-3">Task Status Legend</h4>
+            <div class="flex flex-wrap gap-4">
+                <div class="flex items-center">
+                    <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">
+                        created
+                    </span>
+                    <span class="ml-2 text-sm text-gray-600">Task created, not started</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                        working
+                    </span>
+                    <span class="ml-2 text-sm text-gray-600">Task in progress</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+                        suspended
+                    </span>
+                    <span class="ml-2 text-sm text-gray-600">Waiting for email reply</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+                        completed
+                    </span>
+                    <span class="ml-2 text-sm text-gray-600">Task completed successfully</span>
+                </div>
+                <div class="flex items-center">
+                    <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                        failed
+                    </span>
+                    <span class="ml-2 text-sm text-gray-600">Task failed</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function showTaskDetail(taskId) {
+    const container = document.getElementById('task-detail-container');
+    container.classList.remove('hidden');
+    htmx.ajax('GET', '/api/dashboard/task/' + taskId, container);
+}
+
+function hideTaskDetail() {
+    const container = document.getElementById('task-detail-container');
+    container.classList.add('hidden');
+    container.innerHTML = '';
+}
+</script>
+{% endblock %}

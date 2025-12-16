@@ -23,6 +23,13 @@ A comprehensive system for autonomous email interactions combining a mock SMTP s
 - **Webhook Server** - Receives email arrival notifications (port 9000)
 - **SSE Streaming** - Real-time task progress updates via Server-Sent Events
 
+### UI Server
+- **Web Interface** - HTMX + Tailwind CSS based interface for Mail Agent
+- **Send Requests** - Submit mail requests via web form
+- **Inbox Viewer** - View inboxes, read emails, download attachments
+- **Reply with Attachments** - Reply to emails with file uploads
+- **Task Dashboard** - Monitor task progress and view results in real-time
+
 ## Quick Start
 
 ### Installation
@@ -85,6 +92,21 @@ uv run mail-agent config
 uv run mail-agent health
 ```
 
+#### UI Server
+```bash
+# Start the UI server
+uv run ui-server
+
+# Or run directly
+python -m ui.main
+```
+
+The UI server will start on `0.0.0.0:8080` with:
+- Home Page: `http://localhost:8080`
+- Send Request: `http://localhost:8080/send`
+- Inbox Viewer: `http://localhost:8080/inbox`
+- Task Dashboard: `http://localhost:8080/dashboard`
+
 ## Configuration
 
 Configure via environment variables. See `.env.example` for all options.
@@ -137,6 +159,18 @@ MAIL_AGENT_A2A_PORT=8000
 
 # Logging
 MAIL_AGENT_LOG_LEVEL=INFO
+```
+
+### UI Server (`UI_*`)
+
+```bash
+UI_HOST=0.0.0.0
+UI_PORT=8080
+UI_A2A_SERVER_URL=http://localhost:8000
+UI_MOCK_SMTP_API_URL=http://localhost:8025
+UI_DEFAULT_INBOX_EMAIL=info-agent@gmail.com
+UI_HTTP_TIMEOUT_SECONDS=30.0
+UI_LOG_LEVEL=INFO
 ```
 
 ## Usage Examples
@@ -516,6 +550,9 @@ uv run mock-smtp
 ## mail agent
 uv run mail-agent a2a
 uv run mail-agent run "send mail to raj@gmail.com asking 10 food recipes in csv file"
+
+# ui
+uv run ui-server
 
 ## a2aclient
 python scripts/a2a_client.py info

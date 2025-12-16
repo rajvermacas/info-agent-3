@@ -2,12 +2,13 @@
 
 ## Project Overview
 
-**Info Agent** is a dual-component system for autonomous email interactions and testing:
+**Info Agent** is a three-component system for autonomous email interactions and testing:
 
 1. **Mock SMTP Server** - Testing tool with SMTP (port 1025) + REST API (port 8025) for email workflows
 2. **Mail Agent** - LangGraph-powered autonomous agent that sends requests via email, validates responses, and handles multi-turn conversations with POCs (Points of Contact)
+3. **UI Server** - HTMX + Tailwind CSS web interface for Mail Agent (port 8080)
 
-Built with aiosmtpd, FastAPI, LangGraph, and Google A2A protocol support.
+Built with aiosmtpd, FastAPI, LangGraph, HTMX, Tailwind CSS, and Google A2A protocol support.
 
 ## Development Commands
 
@@ -44,6 +45,13 @@ uv run python scripts/a2a_client.py interactive
 
 # Reply Simulator (POC Email Simulator)
 uv run python scripts/poc_reply_simulator.py --from "raj@gmail.com" --to "info-agent@gmail.com" --subject "Re: Request: 10 Actor names" --body "Please find attached." --attachment ./test_data/sample_actors.csv
+
+# UI Server
+uv run ui-server
+# UI: http://localhost:8080
+# Send Request: http://localhost:8080/send
+# Inbox: http://localhost:8080/inbox
+# Dashboard: http://localhost:8080/dashboard
 ```
 
 ### Testing
@@ -58,7 +66,7 @@ pytest tests/test_models.py    # Mock SMTP tests only
 
 ### High-Level Design
 
-**Three-Server Architecture:**
+**Four-Server Architecture:**
 
 1. **Mock SMTP Server** (Ports 1025, 8025)
    - Receives emails via SMTP protocol
@@ -74,6 +82,11 @@ pytest tests/test_models.py    # Mock SMTP tests only
    - Receives email arrival notifications from Mock SMTP
    - Routes webhooks to active agent tasks
    - FastAPI + SSE streaming
+
+4. **UI Server** (Port 8080)
+   - Web interface for Mail Agent
+   - HTMX + Tailwind CSS frontend
+   - Communicates with A2A and Mock SMTP servers
 
 **Mail Agent Flow:**
 ```
@@ -157,6 +170,26 @@ User Instruction → Parse → Compose Email → Send → Wait for Reply
 │           └── routes/
 │               └── tasks.py    # Task status endpoints
 │
+│   └── ui/                     # UI Server
+│       ├── main.py             # FastAPI entrypoint
+│       ├── config.py           # Settings (UI_* prefix)
+│       ├── routes/             # Route handlers
+│       │   ├── pages.py        # Page routes (GET /, /send, /inbox, /dashboard)
+│       │   ├── send_request.py # Send request API
+│       │   ├── inbox.py        # Inbox operations API
+│       │   └── dashboard.py    # Dashboard API
+│       ├── services/           # Backend service clients
+│       │   ├── a2a_client.py   # A2A server communication
+│       │   └── smtp_client.py  # Mock SMTP API communication
+│       ├── templates/          # Jinja2 templates
+│       │   ├── base.html       # Base template (Tailwind + HTMX)
+│       │   ├── index.html      # Home page
+│       │   ├── send_request.html
+│       │   ├── inbox/          # Inbox templates
+│       │   ├── dashboard/      # Dashboard templates
+│       │   └── partials/       # HTMX partial templates
+│       └── static/             # Static files (CSS)
+│
 ├── tests/
 │   ├── conftest.py
 │   ├── test_models.py          # Mock SMTP tests
@@ -226,6 +259,21 @@ User Instruction → Parse → Compose Email → Send → Wait for Reply
 | **task_manager/manager.py** | Task lifecycle (create, update, get, list) |
 | **a2a/server.py** | Starlette app with A2A SDK, non-blocking execution |
 | **a2a/executor.py** | Wraps LangGraph agent, handles task lifecycle |
+
+#### UI Server
+
+| Component | Responsibility |
+|-----------|---------------|
+| **main.py** | FastAPI entrypoint with lifespan, creates app |
+| **config.py** | Pydantic Settings with `UI_*` env vars |
+| **routes/pages.py** | Page routes (/, /send, /inbox, /dashboard) |
+| **routes/send_request.py** | Send request API (POST /api/send/submit) |
+| **routes/inbox.py** | Inbox operations (list, view, reply with attachments) |
+| **routes/dashboard.py** | Dashboard operations (list tasks, view task detail) |
+| **services/a2a_client.py** | A2A server communication (send tasks, get status) |
+| **services/smtp_client.py** | Mock SMTP API communication (list inboxes, send emails) |
+| **templates/base.html** | Base template with Tailwind CSS CDN + HTMX |
+| **templates/partials/*.html** | HTMX partial templates for dynamic updates |
 
 ### Mail Agent State Machine
 
@@ -345,6 +393,28 @@ MAIL_AGENT_A2A_AGENT_VERSION=1.0.0
 MAIL_AGENT_LOG_LEVEL=INFO
 ```
 
+#### UI Server (`UI_*`)
+
+```bash
+# Server settings
+UI_HOST=0.0.0.0                            # Default: 0.0.0.0
+UI_PORT=8080                               # Default: 8080
+
+# External service URLs
+UI_A2A_SERVER_URL=http://localhost:8000    # A2A server URL
+UI_MOCK_SMTP_API_URL=http://localhost:8025 # Mock SMTP API URL
+
+# Default inbox
+UI_DEFAULT_INBOX_EMAIL=info-agent@gmail.com
+
+# HTTP client settings
+UI_HTTP_TIMEOUT_SECONDS=30.0               # Default: 30.0
+UI_HTTP_LONG_POLL_TIMEOUT_SECONDS=300.0    # Default: 300.0
+
+# Logging
+UI_LOG_LEVEL=INFO                          # Default: INFO
+```
+
 ## Key Files Reference
 
 | File | Purpose | Modify When |
@@ -363,6 +433,13 @@ MAIL_AGENT_LOG_LEVEL=INFO
 | `mail_agent/tools/attachment_parser.py` | Attachment parsing | Adding file formats |
 | `mail_agent/a2a/server.py` | A2A server | Changing A2A integration |
 | `mail_agent/persistence/checkpointer.py` | State persistence | Changing persistence logic |
+| **UI Server** | | |
+| `ui/main.py` | Server entrypoint | Adding routes, lifespan |
+| `ui/config.py` | Settings | Adding config options |
+| `ui/routes/*.py` | Route handlers | Adding pages or API endpoints |
+| `ui/services/*.py` | Service clients | Changing A2A/SMTP communication |
+| `ui/templates/*.html` | Jinja2 templates | Changing UI |
+| `ui/templates/partials/*.html` | HTMX partials | Adding dynamic updates |
 
 ## Development Patterns
 

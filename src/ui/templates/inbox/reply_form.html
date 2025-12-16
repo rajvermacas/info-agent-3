@@ -1,0 +1,144 @@
+<!-- Reply Form Panel -->
+<div class="bg-white shadow rounded-lg">
+    <div class="px-4 py-5 sm:p-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Reply to Email</h3>
+            <button
+                type="button"
+                onclick="hideReplyForm()"
+                class="text-gray-400 hover:text-gray-500"
+            >
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        </div>
+
+        <!-- Original Email Summary -->
+        <div class="bg-gray-50 rounded-md p-3 mb-4">
+            <p class="text-sm text-gray-600">
+                <strong>Replying to:</strong> {{ original_email.from_address }}<br>
+                <strong>Original Subject:</strong> {{ original_email.subject }}
+            </p>
+        </div>
+
+        <!-- Reply Form -->
+        <form hx-post="/api/inbox/send-reply"
+              hx-target="#reply-result"
+              hx-swap="innerHTML"
+              hx-indicator="#reply-loading"
+              hx-encoding="multipart/form-data"
+              class="space-y-4">
+
+            <!-- Hidden fields -->
+            <input type="hidden" name="to_address" value="{{ reply_to }}">
+
+            <!-- From Address -->
+            <div>
+                <label for="from_address" class="block text-sm font-medium text-gray-700">
+                    From
+                </label>
+                <input
+                    type="email"
+                    id="from_address"
+                    name="from_address"
+                    value="{{ inbox_address }}"
+                    required
+                    class="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                >
+            </div>
+
+            <!-- To Address (readonly) -->
+            <div>
+                <label for="to_display" class="block text-sm font-medium text-gray-700">
+                    To
+                </label>
+                <input
+                    type="email"
+                    id="to_display"
+                    value="{{ reply_to }}"
+                    readonly
+                    class="mt-1 shadow-sm block w-full sm:text-sm border-gray-300 rounded-md p-2 border bg-gray-100 text-gray-600"
+                >
+            </div>
+
+            <!-- Subject -->
+            <div>
+                <label for="subject" class="block text-sm font-medium text-gray-700">
+                    Subject
+                </label>
+                <input
+                    type="text"
+                    id="subject"
+                    name="subject"
+                    value="{{ reply_subject }}"
+                    required
+                    class="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                >
+            </div>
+
+            <!-- Body -->
+            <div>
+                <label for="body" class="block text-sm font-medium text-gray-700">
+                    Message
+                </label>
+                <textarea
+                    id="body"
+                    name="body"
+                    rows="6"
+                    required
+                    placeholder="Type your reply here..."
+                    class="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                ></textarea>
+            </div>
+
+            <!-- Attachment -->
+            <div>
+                <label for="attachment" class="block text-sm font-medium text-gray-700">
+                    Attachment (optional)
+                </label>
+                <div class="mt-1 flex items-center">
+                    <input
+                        type="file"
+                        id="attachment"
+                        name="attachment"
+                        accept=".csv,.xlsx,.xls,.txt,.pdf,.doc,.docx"
+                        class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                    >
+                </div>
+                <p class="mt-1 text-sm text-gray-500">
+                    Supported formats: CSV, Excel, TXT, PDF, Word documents
+                </p>
+            </div>
+
+            <!-- Submit Buttons -->
+            <div class="flex items-center space-x-4">
+                <button
+                    type="submit"
+                    class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                    <span id="reply-loading" class="htmx-indicator mr-2">
+                        <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </span>
+                    Send Reply
+                </button>
+                <button
+                    type="button"
+                    onclick="hideReplyForm()"
+                    class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                    Cancel
+                </button>
+            </div>
+        </form>
+
+        <!-- Result Container -->
+        <div id="reply-result" class="mt-4">
+            <!-- Reply result will appear here -->
+        </div>
+    </div>
+</div>

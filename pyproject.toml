@@ -47,6 +47,8 @@ dependencies = [
     "a2a-sdk[http-server]>=0.2.0",
     # SSE Streaming
     "sse-starlette>=1.6.0",
+    # UI Server
+    "jinja2>=3.1.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +63,7 @@ dev = [
 [project.scripts]
 mock-smtp = "mock_smtp.main:main"
 mail-agent = "mail_agent.main:main"
+ui-server = "ui.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

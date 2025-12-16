@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Send Request - Mail Agent UI{% endblock %}
+
+{% block page_title %}Send Mail Request{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Instruction Form -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">Create a New Mail Request</h3>
+            <p class="text-sm text-gray-600 mb-4">
+                Enter your instruction below. For example: "Send mail to raj@gmail.com asking 10 food recipes in CSV file"
+            </p>
+
+            <form hx-post="/api/send/submit"
+                  hx-target="#result-container"
+                  hx-swap="innerHTML"
+                  hx-indicator="#loading-indicator"
+                  class="space-y-4">
+
+                <div>
+                    <label for="instruction" class="block text-sm font-medium text-gray-700">
+                        Instruction
+                    </label>
+                    <div class="mt-1">
+                        <textarea
+                            id="instruction"
+                            name="instruction"
+                            rows="4"
+                            required
+                            placeholder="Send mail to raj@gmail.com asking 10 food recipes in CSV file"
+                            class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-3 border"
+                        ></textarea>
+                    </div>
+                    <p class="mt-2 text-sm text-gray-500">
+                        Be specific about what data you need and the format (CSV, Excel, etc.)
+                    </p>
+                </div>
+
+                <div class="flex items-center space-x-4">
+                    <button
+                        type="submit"
+                        class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                        <span id="loading-indicator" class="htmx-indicator mr-2">
+                            <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </span>
+                        Send Request
+                    </button>
+                    <button
+                        type="reset"
+                        class="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                        Clear
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Result Container -->
+    <div id="result-container">
+        <!-- Task submission result will appear here -->
+    </div>
+
+    <!-- Example Instructions -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">Example Instructions</h3>
+            <div class="space-y-3">
+                <div class="p-3 bg-gray-50 rounded-md">
+                    <button
+                        type="button"
+                        onclick="document.getElementById('instruction').value = this.dataset.text"
+                        data-text="Send mail to raj@gmail.com asking 10 food recipes in CSV file"
+                        class="text-sm text-indigo-600 hover:text-indigo-500 cursor-pointer text-left w-full"
+                    >
+                        Send mail to raj@gmail.com asking 10 food recipes in CSV file
+                    </button>
+                </div>
+                <div class="p-3 bg-gray-50 rounded-md">
+                    <button
+                        type="button"
+                        onclick="document.getElementById('instruction').value = this.dataset.text"
+                        data-text="Email data-team@company.com requesting quarterly sales report in Excel format"
+                        class="text-sm text-indigo-600 hover:text-indigo-500 cursor-pointer text-left w-full"
+                    >
+                        Email data-team@company.com requesting quarterly sales report in Excel format
+                    </button>
+                </div>
+                <div class="p-3 bg-gray-50 rounded-md">
+                    <button
+                        type="button"
+                        onclick="document.getElementById('instruction').value = this.dataset.text"
+                        data-text="Send mail to hr@example.com asking for employee directory with names and departments"
+                        class="text-sm text-indigo-600 hover:text-indigo-500 cursor-pointer text-left w-full"
+                    >
+                        Send mail to hr@example.com asking for employee directory with names and departments
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

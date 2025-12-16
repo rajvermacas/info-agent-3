@@ -1,0 +1,132 @@
+<!-- Task Detail Panel -->
+<div class="bg-white shadow rounded-lg">
+    <div class="px-4 py-5 sm:p-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Task Detail</h3>
+            <button
+                type="button"
+                onclick="hideTaskDetail()"
+                class="text-gray-400 hover:text-gray-500"
+            >
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        </div>
+
+        <!-- Task Info -->
+        <div class="border-b border-gray-200 pb-4 mb-4">
+            <dl class="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Task ID</dt>
+                    <dd class="text-sm text-gray-900 font-mono">{{ task.task_id }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Status</dt>
+                    <dd class="mt-1">
+                        {% if task.state == 'completed' %}
+                        <span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">
+                            {{ task.state }}
+                        </span>
+                        {% elif task.state == 'failed' %}
+                        <span class="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                            {{ task.state }}
+                        </span>
+                        {% elif task.state == 'suspended' %}
+                        <span class="inline-flex items-center rounded-full bg-yellow-100 px-2.5 py-0.5 text-xs font-medium text-yellow-800">
+                            {{ task.state }}
+                        </span>
+                        {% elif task.state == 'working' %}
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                            {{ task.state }}
+                        </span>
+                        {% else %}
+                        <span class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800">
+                            {{ task.state }}
+                        </span>
+                        {% endif %}
+                    </dd>
+                </div>
+                {% if task.poc_email %}
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">POC Email</dt>
+                    <dd class="text-sm text-gray-900">{{ task.poc_email }}</dd>
+                </div>
+                {% endif %}
+                {% if task.message %}
+                <div class="sm:col-span-2">
+                    <dt class="text-sm font-medium text-gray-500">Message</dt>
+                    <dd class="text-sm text-gray-900">{{ task.message }}</dd>
+                </div>
+                {% endif %}
+                {% if task.created_at %}
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Created</dt>
+                    <dd class="text-sm text-gray-900">{{ task.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+                </div>
+                {% endif %}
+                {% if task.completed_at %}
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Completed</dt>
+                    <dd class="text-sm text-gray-900">{{ task.completed_at.strftime('%Y-%m-%d %H:%M:%S') }}</dd>
+                </div>
+                {% endif %}
+            </dl>
+        </div>
+
+        <!-- Result Section -->
+        {% if task.result %}
+        <div class="mb-4">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Result</h4>
+            <div class="bg-green-50 rounded-md p-4">
+                <pre class="text-sm text-green-800 whitespace-pre-wrap overflow-x-auto">{{ task.result | tojson(indent=2) }}</pre>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Error Section -->
+        {% if task.error %}
+        <div class="mb-4">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Error</h4>
+            <div class="bg-red-50 rounded-md p-4">
+                <p class="text-sm text-red-800">{{ task.error }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Auto-refresh for non-terminal states -->
+        {% if task.state not in ['completed', 'failed'] %}
+        <div hx-get="/api/dashboard/task/{{ task.task_id }}/status"
+             hx-trigger="every 3s"
+             hx-swap="innerHTML"
+             id="auto-status-refresh"
+             class="mt-4">
+            <div class="flex items-center text-sm text-gray-500">
+                <div class="h-2 w-2 rounded-full bg-yellow-400 mr-2 pulse-loading"></div>
+                Auto-refreshing status...
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Actions -->
+        <div class="flex items-center space-x-4 mt-4">
+            {% if task.state == 'suspended' and task.poc_email %}
+            <a href="/inbox"
+               class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                <svg class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+                </svg>
+                View Inbox to Reply
+            </a>
+            {% endif %}
+            <button
+                type="button"
+                onclick="hideTaskDetail()"
+                class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+                Close
+            </button>
+        </div>
+    </div>
+</div>
