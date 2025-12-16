@@ -62,13 +62,15 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
         headers = state.get("_extracted_headers", [])
         row_count = state.get("_extracted_row_count", 0)
 
-        logger.debug(
-            f"Validating: content_length={len(extracted_content)}, "
-            f"headers={headers}, row_count={row_count}"
-        )
-
         settings = get_settings()
         llm_client = LLMClient(settings)
+
+        logger.info(
+            f"Validating: content_length={len(extracted_content)}, "
+            f"max_chars={settings.validation_content_max_chars}, "
+            f"truncated={len(extracted_content) > settings.validation_content_max_chars}, "
+            f"headers={headers}, row_count={row_count}"
+        )
 
         # Generate validation prompt
         prompt = PromptTemplates.validate_response(
@@ -77,6 +79,7 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
             extracted_content=extracted_content,
             row_count=row_count,
             headers=headers,
+            max_content_chars=settings.validation_content_max_chars,
         )
 
         # Call LLM for validation

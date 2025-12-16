@@ -169,6 +169,7 @@ Write the email subject and body."""
         extracted_content: str,
         row_count: int,
         headers: list[str],
+        max_content_chars: int = 8000,
     ) -> str:
         """
         Create prompt for validating POC response.
@@ -179,6 +180,7 @@ Write the email subject and body."""
             extracted_content: JSON/text extracted from attachment.
             row_count: Number of rows in the attachment.
             headers: Column headers from the attachment.
+            max_content_chars: Maximum characters of content to include in prompt.
 
         Returns:
             Formatted prompt string.
@@ -190,7 +192,7 @@ Received response content:
 - Row count: {row_count}
 - Headers/Columns: {', '.join(headers)}
 - Data preview:
-{extracted_content[:2000]}{"..." if len(extracted_content) > 2000 else ""}
+{extracted_content[:max_content_chars]}{"..." if len(extracted_content) > max_content_chars else ""}
 
 Analyze the following:
 1. Does the response contain the requested information?

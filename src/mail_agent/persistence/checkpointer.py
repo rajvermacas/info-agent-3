@@ -6,7 +6,8 @@ with the LangGraph state machine for checkpoint persistence.
 """
 
 import logging
-from typing import Optional
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -22,23 +23,33 @@ class CheckpointerError(Exception):
     pass
 
 
+@asynccontextmanager
 async def create_checkpointer(
     settings: Optional[Settings] = None,
-) -> AsyncSqliteSaver:
+) -> AsyncIterator[AsyncSqliteSaver]:
     """
-    Create and initialize a LangGraph AsyncSqliteSaver checkpointer.
+    Create a LangGraph AsyncSqliteSaver checkpointer as an async context manager.
 
     The checkpointer manages LangGraph state persistence, allowing the agent
     to save state at interrupt points and resume later.
 
+    Must be used with 'async with' to ensure proper lifecycle management.
+    The checkpointer connection is automatically closed when the context exits.
+
     Args:
         settings: Configuration settings. Uses get_settings() if not provided.
 
-    Returns:
+    Yields:
         Initialized AsyncSqliteSaver ready for use with LangGraph.
 
     Raises:
         CheckpointerError: If checkpointer creation fails.
+
+    Example:
+        async with create_checkpointer(settings) as checkpointer:
+            graph = compile_mail_agent_graph(checkpointer=checkpointer)
+            # Use graph...
+        # Checkpointer automatically closed here
     """
     if settings is None:
         settings = get_settings()
@@ -47,39 +58,13 @@ async def create_checkpointer(
     logger.info(f"Creating AsyncSqliteSaver checkpointer with db_path: {db_path}")
 
     try:
-        # Create the checkpointer using the connection string format
-        # AsyncSqliteSaver.from_conn_string creates and manages its own connection
-        checkpointer = AsyncSqliteSaver.from_conn_string(db_path)
-
-        # Setup the checkpointer (creates required tables)
-        await checkpointer.setup()
-
-        logger.info("AsyncSqliteSaver checkpointer created and initialized")
-        return checkpointer
+        # AsyncSqliteSaver.from_conn_string returns an async context manager
+        # that handles connection setup and teardown automatically
+        async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
+            logger.info("AsyncSqliteSaver checkpointer created and initialized")
+            yield checkpointer
+            logger.info("Closing AsyncSqliteSaver checkpointer")
 
     except Exception as e:
         logger.error(f"Failed to create checkpointer: {e}")
         raise CheckpointerError(f"Failed to create checkpointer: {e}") from e
-
-
-async def close_checkpointer(checkpointer: AsyncSqliteSaver) -> None:
-    """
-    Close a checkpointer and release its resources.
-
-    Args:
-        checkpointer: The checkpointer to close.
-
-    Note:
-        This is a best-effort operation. Errors are logged but not raised.
-    """
-    try:
-        logger.info("Closing AsyncSqliteSaver checkpointer")
-        # AsyncSqliteSaver manages its own connection lifecycle
-        # The connection is closed when the checkpointer goes out of scope
-        # But we can explicitly close if needed by accessing internal connection
-        if hasattr(checkpointer, 'conn') and checkpointer.conn is not None:
-            await checkpointer.conn.close()
-        logger.info("Checkpointer closed")
-
-    except Exception as e:
-        logger.warning(f"Error closing checkpointer (non-fatal): {e}")

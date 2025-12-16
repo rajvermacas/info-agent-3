@@ -496,10 +496,10 @@ class TestInterruptDetection:
         event = {"node_name": {"output": "value"}}
         assert executor._is_interrupt_event(event) is False
 
-    def test_extract_interrupt_data_direct(
+    def test_extract_interrupt_data_direct_dict(
         self, executor: MailAgentA2AExecutor
     ) -> None:
-        """Test extracting interrupt data from direct key."""
+        """Test extracting interrupt data from direct dict."""
         event = {
             "__interrupt__": {
                 "reason": "waiting_for_reply",
@@ -508,6 +508,132 @@ class TestInterruptDetection:
         }
         data = executor._extract_interrupt_data(event)
         assert data == {"reason": "waiting_for_reply", "poc_email": "test@example.com"}
+
+
+class TestInterruptDataExtraction:
+    """Tests for _extract_interrupt_data and _parse_interrupt_info methods."""
+
+    def test_extract_with_langgraph_interrupt_object(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """
+        Test extracting interrupt data from actual LangGraph Interrupt object.
+
+        This is the most common format from LangGraph when interrupt() is called.
+        """
+        from langgraph.types import Interrupt
+
+        payload = {
+            "reason": "waiting_for_reply",
+            "poc_email": "poc@example.com",
+            "task_id": "task-123",
+            "sent_email_id": "email-456",
+            "attempt": 1,
+        }
+        event = {"__interrupt__": [Interrupt(value=payload)]}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == payload
+        assert data["poc_email"] == "poc@example.com"
+        assert data["task_id"] == "task-123"
+
+    def test_extract_with_mock_interrupt_object(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting from object with .value attribute (mock)."""
+
+        class MockInterrupt:
+            def __init__(self, value: dict):
+                self.value = value
+
+        payload = {"poc_email": "test@example.com", "reason": "waiting"}
+        event = {"__interrupt__": [MockInterrupt(payload)]}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == payload
+        assert data["poc_email"] == "test@example.com"
+
+    def test_extract_with_list_of_dicts(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting from list of dicts directly."""
+        payload = {"poc_email": "test@example.com", "reason": "waiting"}
+        event = {"__interrupt__": [payload]}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == payload
+        assert data["poc_email"] == "test@example.com"
+
+    def test_extract_with_tuple_format(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting from tuple format (value, id)."""
+        payload = {"poc_email": "test@example.com", "reason": "waiting"}
+        event = {"__interrupt__": [(payload, "interrupt-id-123")]}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == payload
+        assert data["poc_email"] == "test@example.com"
+
+    def test_extract_with_nested_interrupt(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting from interrupt nested in node output."""
+        payload = {"poc_email": "test@example.com", "reason": "waiting"}
+        event = {"wait_for_reply": {"__interrupt__": payload}}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == payload
+        assert data["poc_email"] == "test@example.com"
+
+    def test_extract_returns_empty_dict_for_no_interrupt(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test that no interrupt returns empty dict."""
+        event = {"node_name": {"output": "value"}}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == {}
+
+    def test_extract_with_empty_list(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting from empty interrupt list returns empty dict."""
+        event = {"__interrupt__": []}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == {}
+
+    def test_extract_with_invalid_value_type(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test extracting when Interrupt.value is not a dict."""
+
+        class InvalidInterrupt:
+            def __init__(self, value):
+                self.value = value
+
+        event = {"__interrupt__": [InvalidInterrupt("not a dict")]}
+
+        data = executor._extract_interrupt_data(event)
+
+        assert data == {}
+
+    def test_parse_interrupt_info_with_string(
+        self, executor: MailAgentA2AExecutor
+    ) -> None:
+        """Test parsing unknown interrupt format returns empty dict."""
+        # Call _parse_interrupt_info directly
+        data = executor._parse_interrupt_info("unknown format")
+
+        assert data == {}
 
     @pytest.mark.asyncio
     async def test_execute_with_interrupt_suspends_task(

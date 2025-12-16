@@ -408,6 +408,77 @@ class TaskManager:
                 return True
         return False
 
+    def _parse_interrupt_info(self, interrupt_info: Any) -> dict[str, Any]:
+        """
+        Parse interrupt info from various possible formats.
+
+        LangGraph returns different formats during initial execution vs resume:
+        - Initial: [Interrupt(value={...})] - list of Interrupt dataclass objects
+        - Resume: [(dict, interrupt_id), ...] - list of tuples
+
+        Handles:
+        1. List of Interrupt objects with .value attribute
+        2. List of tuples (value, id)
+        3. List of dicts directly
+        4. Direct dict
+
+        Args:
+            interrupt_info: Raw interrupt information from the event.
+
+        Returns:
+            Extracted interrupt payload dict, or empty dict if parsing fails.
+        """
+        logger.debug(
+            f"Parsing interrupt info: type={type(interrupt_info).__name__}"
+        )
+
+        # Case 1: List/tuple of items
+        if isinstance(interrupt_info, (list, tuple)) and len(interrupt_info) > 0:
+            first_item = interrupt_info[0]
+            logger.debug(
+                f"First interrupt item: type={type(first_item).__name__}, "
+                f"has_value_attr={hasattr(first_item, 'value')}"
+            )
+
+            # Interrupt dataclass with .value attribute
+            if hasattr(first_item, 'value'):
+                value = first_item.value
+                if isinstance(value, dict):
+                    logger.debug(f"Extracted from .value attribute: {list(value.keys())}")
+                    return value
+                logger.warning(
+                    f"Interrupt.value is not a dict: type={type(value).__name__}"
+                )
+                return {}
+
+            # Tuple format: (value, id)
+            if isinstance(first_item, tuple) and len(first_item) > 0:
+                value = first_item[0]
+                if isinstance(value, dict):
+                    logger.debug(f"Extracted from tuple[0]: {list(value.keys())}")
+                    return value
+                return {}
+
+            # Dict directly in list
+            if isinstance(first_item, dict):
+                logger.debug(f"First interrupt is dict: {list(first_item.keys())}")
+                return first_item
+
+            logger.warning(
+                f"Unknown first_item type: {type(first_item).__name__}"
+            )
+            return {}
+
+        # Case 2: Direct dict
+        if isinstance(interrupt_info, dict):
+            logger.debug(f"Interrupt info is direct dict: {list(interrupt_info.keys())}")
+            return interrupt_info
+
+        logger.warning(
+            f"Unknown interrupt_info structure: type={type(interrupt_info).__name__}"
+        )
+        return {}
+
     async def _handle_re_suspend(
         self,
         task_id: str,
@@ -416,7 +487,9 @@ class TaskManager:
     ) -> None:
         """Handle re-suspension during retry scenario."""
         # Extract POC email from interrupt data
-        interrupt_data = event.get("__interrupt__", {})
+        # LangGraph returns different formats during resume vs initial execution
+        raw_interrupt = event.get("__interrupt__", {})
+        interrupt_data = self._parse_interrupt_info(raw_interrupt)
         poc_email = interrupt_data.get("poc_email")
 
         if poc_email:

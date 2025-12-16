@@ -14,6 +14,7 @@ import asyncio
 import logging
 from typing import Any, Optional
 
+from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
 from mail_agent.agent.state import AgentState, get_conversation, update_conversation
@@ -131,6 +132,14 @@ async def wait_for_reply(state: AgentState) -> dict[str, Any]:
             "pending_webhooks": [str(email_id)],
             "progress_messages": [progress_msg],
         }
+
+    except GraphInterrupt:
+        # Re-raise GraphInterrupt to allow LangGraph to handle it properly
+        # The graph engine catches this and saves checkpoint for resumption
+        logger.debug(
+            f"GraphInterrupt raised for {current_poc}, propagating to graph engine"
+        )
+        raise
 
     except asyncio.TimeoutError:
         error_msg = f"Timeout waiting for reply from {current_poc}"

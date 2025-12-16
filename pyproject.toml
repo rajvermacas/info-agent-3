@@ -35,7 +35,9 @@ dependencies = [
     # Mail Agent
     "langgraph>=0.2.0",
     "langgraph-checkpoint-sqlite>=1.0.0",
-    "aiosqlite>=0.19.0",
+    # TODO: Remove <0.22.0 constraint after langgraph-checkpoint-sqlite fixes
+    # https://github.com/langchain-ai/langgraph/issues/6583
+    "aiosqlite>=0.19.0,<0.22.0",
     "langchain-google-genai>=2.0.0",
     "langchain-openai>=0.2.0",
     "openpyxl>=3.1.0",

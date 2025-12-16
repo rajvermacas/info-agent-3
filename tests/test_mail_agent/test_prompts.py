@@ -106,7 +106,7 @@ class TestPromptTemplates:
 
     def test_validate_response_prompt_truncation(self):
         """Test validate_response truncates long content."""
-        long_content = "x" * 3000
+        long_content = "x" * 10000
 
         prompt = PromptTemplates.validate_response(
             request_description="test",
@@ -117,8 +117,41 @@ class TestPromptTemplates:
         )
 
         assert "..." in prompt
-        # Content should be truncated to 2000 chars
+        # Content should be truncated to default 8000 chars
+        assert long_content[:8000] in prompt
+
+    def test_validate_response_prompt_custom_max_chars(self):
+        """Test validate_response respects custom max_content_chars."""
+        long_content = "x" * 3000
+
+        # Test with custom limit of 2000
+        prompt = PromptTemplates.validate_response(
+            request_description="test",
+            success_criteria="test",
+            extracted_content=long_content,
+            row_count=1,
+            headers=["A"],
+            max_content_chars=2000,
+        )
+
+        assert "..." in prompt
         assert long_content[:2000] in prompt
+        assert long_content[:2001] not in prompt
+
+    def test_validate_response_prompt_no_truncation(self):
+        """Test validate_response does not truncate short content."""
+        short_content = "x" * 100
+
+        prompt = PromptTemplates.validate_response(
+            request_description="test",
+            success_criteria="test",
+            extracted_content=short_content,
+            row_count=1,
+            headers=["A"],
+        )
+
+        assert "..." not in prompt
+        assert short_content in prompt
 
     def test_compose_followup_prompt(self):
         """Test compose_followup prompt generation."""

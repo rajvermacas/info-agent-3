@@ -333,27 +333,94 @@ class MailAgentA2AExecutor(AgentExecutor):
         """
         Extract interrupt data from an interrupt event.
 
+        Handles multiple possible structures from LangGraph:
+        1. List of Interrupt dataclass objects: {"__interrupt__": [Interrupt(value=...)]}
+        2. List of tuples: {"__interrupt__": [(value, id), ...]}
+        3. List of dicts: {"__interrupt__": [{...}, ...]}
+        4. Direct dict: {"__interrupt__": {...}}
+        5. Nested in node output: {"node_name": {"__interrupt__": ...}}
+
         Args:
             event: Graph stream event containing interrupt.
 
         Returns:
-            Interrupt payload data.
+            Interrupt payload data (dict with poc_email, task_id, etc.).
         """
-        # Direct __interrupt__ key
-        if "__interrupt__" in event:
-            interrupt_info = event["__interrupt__"]
-            if isinstance(interrupt_info, list) and len(interrupt_info) > 0:
-                # Interrupt info is a list of Interrupt objects
-                first_interrupt = interrupt_info[0]
-                if hasattr(first_interrupt, 'value'):
-                    return first_interrupt.value
-            return interrupt_info if isinstance(interrupt_info, dict) else {}
+        logger.debug(f"Extracting interrupt data from event keys: {list(event.keys())}")
 
-        # Check in node outputs
-        for value in event.values():
-            if isinstance(value, dict) and "__interrupt__" in value:
-                return value["__interrupt__"]
+        # Check in node outputs first (nested structure)
+        if "__interrupt__" not in event:
+            for key, value in event.items():
+                if isinstance(value, dict) and "__interrupt__" in value:
+                    logger.debug(f"Found __interrupt__ nested in node output: {key}")
+                    return self._parse_interrupt_info(value["__interrupt__"])
+            logger.debug("No __interrupt__ found in event")
+            return {}
 
+        interrupt_info = event["__interrupt__"]
+        return self._parse_interrupt_info(interrupt_info)
+
+    def _parse_interrupt_info(self, interrupt_info: Any) -> dict[str, Any]:
+        """
+        Parse interrupt info from various possible formats.
+
+        Args:
+            interrupt_info: The raw interrupt information from the event.
+
+        Returns:
+            Extracted interrupt payload dict.
+        """
+        logger.debug(
+            f"Parsing interrupt info: type={type(interrupt_info).__name__}, "
+            f"value={interrupt_info}"
+        )
+
+        # Case 1: List of Interrupt objects (most common from LangGraph)
+        if isinstance(interrupt_info, (list, tuple)) and len(interrupt_info) > 0:
+            first_interrupt = interrupt_info[0]
+            logger.debug(
+                f"First interrupt item: type={type(first_interrupt).__name__}, "
+                f"has_value_attr={hasattr(first_interrupt, 'value')}"
+            )
+
+            # LangGraph Interrupt dataclass with .value attribute
+            if hasattr(first_interrupt, 'value'):
+                value = first_interrupt.value
+                logger.debug(f"Extracted from .value attribute: {value}")
+                if isinstance(value, dict):
+                    return value
+                logger.warning(
+                    f"Interrupt.value is not a dict: type={type(value).__name__}"
+                )
+                return {}
+
+            # Tuple format: (value, id)
+            if isinstance(first_interrupt, tuple) and len(first_interrupt) > 0:
+                value = first_interrupt[0]
+                logger.debug(f"Extracted from tuple[0]: {value}")
+                if isinstance(value, dict):
+                    return value
+                return {}
+
+            # Dict format directly in list
+            if isinstance(first_interrupt, dict):
+                logger.debug(f"First interrupt is dict: {first_interrupt}")
+                return first_interrupt
+
+            logger.warning(
+                f"Unknown first_interrupt type: {type(first_interrupt).__name__}"
+            )
+            return {}
+
+        # Case 2: Direct dict
+        if isinstance(interrupt_info, dict):
+            logger.debug(f"Interrupt info is direct dict: {interrupt_info}")
+            return interrupt_info
+
+        logger.warning(
+            f"Unknown interrupt_info structure: type={type(interrupt_info).__name__}, "
+            f"value={interrupt_info}"
+        )
         return {}
 
     async def _emit_sse_event(

@@ -133,6 +133,14 @@ class Settings(BaseSettings):
         description="Maximum conversation attempts before giving up",
     )
 
+    # Validation Content Limits
+    validation_content_max_chars: int = Field(
+        default=8000,
+        ge=1000,
+        le=50000,
+        description="Maximum characters of extracted content to include in LLM validation prompt",
+    )
+
     # State Persistence
     sqlite_db_path: str = Field(
         default="./mail_agent_state.db",

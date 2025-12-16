@@ -119,6 +119,36 @@ class TestSettings:
         with pytest.raises(ValueError):
             Settings(max_attempts=11)
 
+    def test_validation_content_max_chars_default(self):
+        """Test validation_content_max_chars default value."""
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings()
+        assert settings.validation_content_max_chars == 8000
+
+    def test_validation_content_max_chars_validation(self):
+        """Test validation_content_max_chars validation."""
+        # Valid range
+        for chars in [1000, 8000, 50000]:
+            settings = Settings(validation_content_max_chars=chars)
+            assert settings.validation_content_max_chars == chars
+
+        # Invalid - too low
+        with pytest.raises(ValueError):
+            Settings(validation_content_max_chars=999)
+
+        # Invalid - too high
+        with pytest.raises(ValueError):
+            Settings(validation_content_max_chars=50001)
+
+    def test_validation_content_max_chars_env_override(self):
+        """Test validation_content_max_chars can be set via environment."""
+        env_vars = {
+            "MAIL_AGENT_VALIDATION_CONTENT_MAX_CHARS": "15000",
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            settings = Settings()
+        assert settings.validation_content_max_chars == 15000
+
     def test_llm_temperature_validation(self):
         """Test LLM temperature validation."""
         # Valid range

@@ -276,11 +276,11 @@ uv run mock-smtp
 
 ## mail agent
 uv run mail-agent a2a
-uv run mail-agent run "send mail to raj@gmail.com asking 10 animals in excel file"
+uv run mail-agent run "send mail to raj@gmail.com asking 10 food recipes in csv file"
 
 ## a2aclient
 python scripts/a2a_client.py info
 uv run python scripts/a2a_client.py interactive
 
 ## reply simulator
-uv run python scripts/poc_reply_simulator.py --from "raj@gmail.com" --to "info-agent@gmail.com" --subject "Re: Request: 10 Actor names" --body "Please find attached." --attachment ./test_data/sample_animals.csv
+uv run python scripts/poc_reply_simulator.py --from "raj@gmail.com" --to "info-agent@gmail.com" --subject "Re: Request: 10 Actor names" --body "Please find attached." --attachment ./test_data/sample_actors.csv

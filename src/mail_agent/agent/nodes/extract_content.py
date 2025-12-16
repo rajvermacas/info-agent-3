@@ -107,7 +107,8 @@ async def extract_content(state: AgentState) -> dict[str, Any]:
 
             logger.info(
                 f"Content extracted: type={parsed.content_type}, "
-                f"rows={row_count}, headers={headers}"
+                f"rows={row_count}, headers={headers}, "
+                f"json_size={len(extracted_content)} chars"
             )
 
             # Update last received email with content
