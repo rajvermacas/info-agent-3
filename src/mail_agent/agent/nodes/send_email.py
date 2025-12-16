@@ -1,5 +1,5 @@
 """
-Send Email Node - Send composed email via mock SMTP REST API.
+Send Email Node - Send composed email via SMTP protocol.
 
 Sends the email composed by compose_email node and records the sent email.
 """
@@ -7,16 +7,16 @@ Sends the email composed by compose_email node and records the sent email.
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from mail_agent.agent.state import (
     AgentState,
-    ConversationState,
     SentEmail,
     get_conversation,
     update_conversation,
 )
 from mail_agent.config import get_settings
-from mail_agent.tools.smtp_client import SMTPClient
+from mail_agent.tools.smtp_sender import SMTPSenderService
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ async def send_email(state: AgentState) -> dict[str, Any]:
 
     This node:
     1. Retrieves the composed email from state
-    2. Sends via mock SMTP REST API
+    2. Sends via SMTP protocol directly to the mock SMTP server
     3. Records the sent email in conversation state
 
     Args:
@@ -66,48 +66,51 @@ async def send_email(state: AgentState) -> dict[str, Any]:
         conversation.status = "sending"
 
         settings = get_settings()
-        smtp_client = SMTPClient(settings)
+        smtp_sender = SMTPSenderService(settings)
 
-        try:
-            # Send email via REST API
-            response = await smtp_client.send_email(
-                to_addresses=[current_poc],
-                subject=subject,
-                body_text=body,
-            )
+        # Generate email_id client-side (SMTP protocol doesn't return one)
+        email_id = uuid4()
 
-            # Record sent email
-            sent_email = SentEmail(
-                email_id=response.email_id,
-                subject=subject,
-                body=body,
-                sent_at=datetime.now(timezone.utc),
-            )
-            conversation.sent_emails.append(sent_email)
-            conversation.attempt_count += 1
-            conversation.status = "waiting"
+        # Send email via SMTP protocol
+        logger.debug(
+            f"Sending email via SMTP: to={current_poc}, subject={subject}, "
+            f"email_id={email_id}"
+        )
+        await smtp_sender.send_email(
+            to_addresses=[current_poc],
+            subject=subject,
+            body_text=body,
+        )
 
-            logger.info(
-                f"Email sent successfully: id={response.email_id}, "
-                f"attempt={conversation.attempt_count}"
-            )
+        # Record sent email
+        sent_email = SentEmail(
+            email_id=email_id,
+            subject=subject,
+            body=body,
+            sent_at=datetime.now(timezone.utc),
+        )
+        conversation.sent_emails.append(sent_email)
+        conversation.attempt_count += 1
+        conversation.status = "waiting"
 
-            progress_msg = (
-                f"Email sent to {current_poc} (attempt {conversation.attempt_count}): "
-                f"'{subject}'"
-            )
+        logger.info(
+            f"Email sent successfully via SMTP: id={email_id}, "
+            f"attempt={conversation.attempt_count}"
+        )
 
-            return {
-                "conversations": update_conversation(state, current_poc, conversation),
-                "current_node": "send_email",
-                "progress_messages": [progress_msg],
-                # Clear composed email from state
-                "_composed_subject": None,
-                "_composed_body": None,
-            }
+        progress_msg = (
+            f"Email sent to {current_poc} (attempt {conversation.attempt_count}): "
+            f"'{subject}'"
+        )
 
-        finally:
-            await smtp_client.close()
+        return {
+            "conversations": update_conversation(state, current_poc, conversation),
+            "current_node": "send_email",
+            "progress_messages": [progress_msg],
+            # Clear composed email from state
+            "_composed_subject": None,
+            "_composed_body": None,
+        }
 
     except Exception as e:
         error_msg = f"Failed to send email to {current_poc}: {e}"
