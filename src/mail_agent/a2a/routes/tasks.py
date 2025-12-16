@@ -26,7 +26,7 @@ class TaskStatusResponse(BaseModel):
     """Response model for task status endpoint."""
 
     task_id: str = Field(description="Unique task identifier")
-    status: str = Field(description="Current task status")
+    state: str = Field(description="Current task state")
     message: str = Field(description="Human-readable status message")
     poc_email: str | None = Field(
         default=None,
@@ -58,7 +58,7 @@ class TaskStatusResponse(BaseModel):
             "examples": [
                 {
                     "task_id": "task-abc-123",
-                    "status": "suspended",
+                    "state": "suspended",
                     "message": "Waiting for reply from poc@example.com",
                     "poc_email": "poc@example.com",
                     "created_at": "2025-12-15T10:00:00+00:00",
@@ -66,7 +66,7 @@ class TaskStatusResponse(BaseModel):
                 },
                 {
                     "task_id": "task-def-456",
-                    "status": "completed",
+                    "state": "completed",
                     "message": "Task completed",
                     "completed_at": "2025-12-15T10:35:00+00:00",
                     "result": {
@@ -139,7 +139,7 @@ def create_tasks_router(task_manager: TaskManager) -> APIRouter:
 
             response = TaskStatusResponse(
                 task_id=task_status.task_id,
-                status=task_status.state.value,
+                state=task_status.state.value,
                 message=task_status.message,
                 poc_email=task_status.poc_email,
                 created_at=task_status.created_at.isoformat() if task_status.created_at else None,

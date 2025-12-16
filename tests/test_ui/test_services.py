@@ -152,6 +152,144 @@ class TestA2AClientService:
 
             await client.close()
 
+    @pytest.mark.asyncio
+    async def test_send_task_message_response_with_task_id(self, settings: Settings) -> None:
+        """Test parsing Message response when task is suspended.
+
+        When agent suspends (wait_for_reply interrupt), the response contains a Message
+        object with task_id embedded in the text.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "kind": "message",
+                "messageId": "msg-abc-123",
+                "role": "agent",
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "[suspended] Waiting for reply from raj@gmail.com. Poll GET /tasks/385ddbda-b7af-4663-8461-f1224bb96e4e for result.",
+                    }
+                ],
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = A2AClientService(settings)
+            result = await client.send_task("Send mail to raj@gmail.com asking for recipes")
+
+            assert isinstance(result, TaskInfo)
+            assert result.task_id == "385ddbda-b7af-4663-8461-f1224bb96e4e"
+            assert result.state == "suspended"
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_send_task_message_response_without_task_id(self, settings: Settings) -> None:
+        """Test parsing Message response without task_id in text.
+
+        When the message text doesn't contain a task_id, we should get empty string.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "kind": "message",
+                "messageId": "msg-abc-123",
+                "role": "agent",
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "[working] Processing request...",
+                    }
+                ],
+            },
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.post = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = A2AClientService(settings)
+            result = await client.send_task("Send mail to test@example.com")
+
+            assert isinstance(result, TaskInfo)
+            assert result.task_id == ""
+            assert result.state == "working"
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_with_state_field(self, settings: Settings) -> None:
+        """Test get_task_status parsing with 'state' field (not 'status').
+
+        The API now returns 'state' field instead of 'status'.
+        """
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "task_id": "test-task-123",
+            "state": "suspended",
+            "message": "Waiting for reply from raj@gmail.com",
+            "poc_email": "raj@gmail.com",
+            "created_at": "2025-12-16T08:44:31+00:00",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = A2AClientService(settings)
+            result = await client.get_task_status("test-task-123")
+
+            assert isinstance(result, TaskInfo)
+            assert result.task_id == "test-task-123"
+            assert result.state == "suspended"
+            assert result.poc_email == "raj@gmail.com"
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_task_status_fallback_to_unknown(self, settings: Settings) -> None:
+        """Test get_task_status returns 'unknown' when state field is missing."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "task_id": "test-task-123",
+            "message": "Some message",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = A2AClientService(settings)
+            result = await client.get_task_status("test-task-123")
+
+            assert result.state == "unknown"
+
+            await client.close()
+
 
 class TestSMTPClientService:
     """Tests for SMTP client service."""

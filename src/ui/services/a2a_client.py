@@ -5,10 +5,11 @@ Handles communication with the A2A server (Mail Agent).
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncGenerator
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 
@@ -197,19 +198,60 @@ class A2AClientService:
             result = data.get("result", {})
 
             # Handle different response formats
+            task_id = None
+            state = "submitted"
+            message = None
+
             if isinstance(result, dict):
-                task_id = result.get("id") or result.get("task_id")
-                state = result.get("state") or result.get("status", "submitted")
-                message = result.get("message")
-            else:
-                task_id = str(result)
-                state = "submitted"
-                message = None
+                # Check if this is a Message response (suspended task)
+                if result.get("kind") == "message":
+                    # Extract task_id from message text content
+                    # Message format: "[suspended] Waiting for reply from {poc}. Poll GET /tasks/{task_id} for result."
+                    parts = result.get("parts", [])
+                    for part in parts:
+                        if isinstance(part, dict):
+                            text = part.get("text", "")
+                            # Handle nested Part structure
+                            if "root" in part:
+                                root = part.get("root", {})
+                                if isinstance(root, dict):
+                                    text = root.get("text", "")
+                        else:
+                            text = ""
+
+                        # Look for task_id in "Poll GET /tasks/{task_id}" pattern
+                        match = re.search(r'/tasks/([a-f0-9-]+)', text)
+                        if match:
+                            task_id = match.group(1)
+                            logger.debug("Extracted task_id from message text: %s", task_id)
+                            break
+
+                    # Extract state from message text prefix
+                    parts_str = str(parts)
+                    if "[suspended]" in parts_str:
+                        state = "suspended"
+                    elif "[completed]" in parts_str:
+                        state = "completed"
+                    elif "[failed]" in parts_str:
+                        state = "failed"
+                    elif "[working]" in parts_str:
+                        state = "working"
+
+                    logger.debug("Message response - task_id: %s, state: %s", task_id, state)
+                else:
+                    # Task response - extract normally
+                    task_id = result.get("id") or result.get("task_id")
+                    state = result.get("state") or result.get("status", "submitted")
+                    message = result.get("message")
+
+            # Validate task_id before returning
+            if task_id is None:
+                logger.warning("Could not extract task_id from response: %s", result)
 
             logger.info("Task submitted successfully: %s (state: %s)", task_id, state)
 
             return TaskInfo(
-                task_id=str(task_id),
+                task_id=task_id if task_id is not None else "",
                 state=state,
                 message=message,
             )
