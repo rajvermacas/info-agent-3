@@ -150,7 +150,7 @@ class SMTPClientService:
             data = response.json()
 
             inboxes = []
-            for inbox_data in data.get("inboxes", []):
+            for inbox_data in data:  # API returns List[InboxSummary] directly
                 inboxes.append(
                     InboxSummary(
                         email_address=inbox_data.get("email_address", ""),
@@ -194,7 +194,7 @@ class SMTPClientService:
             data = response.json()
 
             emails = []
-            for email_data in data.get("emails", []):
+            for email_data in data:  # API returns List[EmailSummary] directly
                 emails.append(
                     EmailSummary(
                         id=email_data.get("id", ""),

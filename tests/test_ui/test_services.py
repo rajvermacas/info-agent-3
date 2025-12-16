@@ -161,15 +161,14 @@ class TestSMTPClientService:
         """Test successful inbox listing."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "inboxes": [
-                {
-                    "email_address": "test@example.com",
-                    "email_count": 5,
-                    "last_email_at": "2024-01-01T12:00:00",
-                },
-            ]
-        }
+        # API returns List[InboxSummary] directly, not wrapped in a dict
+        mock_response.json.return_value = [
+            {
+                "email_address": "test@example.com",
+                "email_count": 5,
+                "last_email_at": "2024-01-01T12:00:00",
+            },
+        ]
         mock_response.raise_for_status = MagicMock()
 
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -193,17 +192,16 @@ class TestSMTPClientService:
         """Test successful inbox retrieval."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "emails": [
-                {
-                    "id": "email-1",
-                    "from_address": "sender@example.com",
-                    "subject": "Test Subject",
-                    "received_at": "2024-01-01T12:00:00",
-                    "has_attachments": False,
-                },
-            ]
-        }
+        # API returns List[EmailSummary] directly, not wrapped in a dict
+        mock_response.json.return_value = [
+            {
+                "id": "email-1",
+                "from_address": "sender@example.com",
+                "subject": "Test Subject",
+                "received_at": "2024-01-01T12:00:00",
+                "has_attachments": False,
+            },
+        ]
         mock_response.raise_for_status = MagicMock()
 
         with patch("httpx.AsyncClient") as mock_client_class:

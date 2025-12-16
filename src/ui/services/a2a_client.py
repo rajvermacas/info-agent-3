@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncGenerator
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -168,6 +168,7 @@ class A2AClientService:
                 "method": "message/send",
                 "params": {
                     "message": {
+                        "messageId": uuid4().hex,
                         "role": "user",
                         "parts": [{"type": "text", "text": instruction}],
                     }
