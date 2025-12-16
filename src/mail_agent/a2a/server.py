@@ -151,13 +151,17 @@ async def create_a2a_application(
     app = app_builder.build()
     logger.info("A2A Starlette application built")
 
-    # 11. Mount task routes
+    # 11. Mount task routes as FastAPI sub-application
+    # FastAPI routes need FastAPI's dependency injection and routing,
+    # so we mount a FastAPI app instead of converting routes manually.
     tasks_router = create_tasks_router(task_manager)
-    # Convert FastAPI router to Starlette routes
-    from starlette.routing import Route
-    for route in tasks_router.routes:
-        app.routes.append(route)
-    logger.info("Task routes mounted")
+    from fastapi import FastAPI as TaskFastAPI
+    from starlette.routing import Mount
+    task_app = TaskFastAPI()
+    task_app.include_router(tasks_router)
+    # Mount at /api so routes become /api/tasks and /api/tasks/{task_id}
+    app.routes.append(Mount("/api", app=task_app))
+    logger.info("Task routes mounted at /api/tasks")
 
     return A2AServerResources(
         app=app,

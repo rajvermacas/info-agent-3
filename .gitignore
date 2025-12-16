@@ -75,3 +75,5 @@ test_data/
 *.sqlite
 mail_agent_state.db-shm
 mail_agent_state.db-wal
+
+.dev-resources/images/

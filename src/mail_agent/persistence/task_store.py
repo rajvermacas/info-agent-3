@@ -367,6 +367,45 @@ class TaskStore:
     # Task Results Operations
     # =========================================================================
 
+    async def get_all_task_results(self) -> list[dict[str, Any]]:
+        """
+        Get all task results (for listing tasks).
+
+        Returns:
+            List of all task result dicts.
+
+        Raises:
+            TaskStoreError: If database operation fails.
+        """
+        logger.debug("Getting all task results")
+
+        try:
+            rows = await self._db.fetch_all(
+                """
+                SELECT task_id, status, result, error, completed_at
+                FROM task_results
+                ORDER BY completed_at DESC
+                """
+            )
+
+            results = [
+                {
+                    "task_id": row[0],
+                    "status": row[1],
+                    "result": json.loads(row[2]) if row[2] else None,
+                    "error": row[3],
+                    "completed_at": row[4],
+                }
+                for row in rows
+            ]
+
+            logger.info(f"Retrieved {len(results)} task results")
+            return results
+
+        except Exception as e:
+            logger.error(f"Failed to get all task results: {e}")
+            raise TaskStoreError(f"Failed to get task results: {e}") from e
+
     async def save_result(
         self,
         task_id: str,

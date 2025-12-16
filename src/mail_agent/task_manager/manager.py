@@ -561,6 +561,62 @@ class TaskManager:
         # Task not found
         raise TaskNotFoundError(f"Task not found: {task_id}")
 
+    async def list_all_tasks(self) -> list[TaskStatus]:
+        """
+        List all tasks (suspended and completed/failed).
+
+        Returns:
+            List of TaskStatus for all known tasks.
+        """
+        logger.debug("Listing all tasks")
+
+        tasks = []
+
+        # Get suspended tasks
+        suspended = await self._task_store.get_all_suspended_tasks()
+        for task in suspended:
+            created_at = datetime.fromisoformat(task["created_at"])
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+
+            expires_at = datetime.fromisoformat(task["expires_at"])
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+            tasks.append(TaskStatus(
+                task_id=task["task_id"],
+                state=TaskState.SUSPENDED,
+                message=f"Waiting for reply from {task['poc_email']}",
+                poc_email=task["poc_email"],
+                created_at=created_at,
+                expires_at=expires_at,
+            ))
+
+        # Get completed/failed tasks
+        results = await self._task_store.get_all_task_results()
+        for result in results:
+            completed_at = datetime.fromisoformat(result["completed_at"])
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=timezone.utc)
+
+            state = (
+                TaskState.COMPLETED
+                if result["status"] == "completed"
+                else TaskState.FAILED
+            )
+
+            tasks.append(TaskStatus(
+                task_id=result["task_id"],
+                state=state,
+                message="Task completed" if state == TaskState.COMPLETED else "Task failed",
+                completed_at=completed_at,
+                result=result.get("result"),
+                error=result.get("error"),
+            ))
+
+        logger.info(f"Listed {len(tasks)} total tasks")
+        return tasks
+
     # =========================================================================
     # Cleanup
     # =========================================================================

@@ -174,28 +174,39 @@ def create_tasks_router(task_manager: TaskManager) -> APIRouter:
 
     @router.get(
         "",
-        summary="List suspended tasks",
-        description="Get a list of currently suspended tasks (for debugging/monitoring).",
+        summary="List all tasks",
+        description="Get a list of all tasks (suspended, completed, and failed).",
     )
-    async def list_suspended_tasks() -> dict[str, Any]:
+    async def list_all_tasks_endpoint() -> dict[str, Any]:
         """
-        List all currently suspended tasks.
+        List all tasks.
 
-        This endpoint is primarily for debugging and monitoring purposes.
+        Returns all tasks from the system including suspended (waiting for reply),
+        completed, and failed tasks.
 
         Returns:
-            Dictionary with count and list of POC emails with pending tasks.
+            Dictionary with tasks list containing task details.
         """
-        logger.info("GET /tasks - listing suspended tasks")
+        logger.info("GET /tasks - listing all tasks")
 
-        pocs = task_manager.get_registered_pocs()
-        count = task_manager.suspended_task_count
+        all_tasks = await task_manager.list_all_tasks()
 
-        logger.info(f"GET /tasks - {count} suspended tasks")
+        tasks_list = [
+            {
+                "task_id": task.task_id,
+                "state": task.state.value,
+                "message": task.message,
+                "poc_email": task.poc_email,
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "result": task.result,
+                "error": task.error,
+            }
+            for task in all_tasks
+        ]
 
-        return {
-            "count": count,
-            "suspended_pocs": pocs,
-        }
+        logger.info(f"GET /tasks - returning {len(tasks_list)} tasks")
+
+        return {"tasks": tasks_list}
 
     return router
