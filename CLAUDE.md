@@ -1,8 +1,13 @@
-# Mock SMTP Server - Developer Documentation
+# Info Agent - Developer Documentation
 
 ## Project Overview
 
-Mock SMTP server for testing email functionality. Dual-server architecture: SMTP (port 1025) + REST API (port 8025). Built with aiosmtpd and FastAPI for local development and integration testing.
+**Info Agent** is a dual-component system for autonomous email interactions and testing:
+
+1. **Mock SMTP Server** - Testing tool with SMTP (port 1025) + REST API (port 8025) for email workflows
+2. **Mail Agent** - LangGraph-powered autonomous agent that sends requests via email, validates responses, and handles multi-turn conversations with POCs (Points of Contact)
+
+Built with aiosmtpd, FastAPI, LangGraph, and Google A2A protocol support.
 
 ## Development Commands
 
@@ -11,143 +16,277 @@ Mock SMTP server for testing email functionality. Dual-server architecture: SMTP
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -e ".[dev]"
+
+# Copy environment template
+cp .env.example .env
+# Edit .env with your API keys
 ```
 
 ### Running
+
 ```bash
-mock-smtp  # or: python -m mock_smtp.main
-# SMTP: localhost:1025
-# API: 0.0.0.0:8025
+# Mock SMTP Server
+uv run mock-smtp
+# SMTP: localhost:1025, API: 0.0.0.0:8025
 # Swagger: http://localhost:8025/docs
+
+# Mail Agent (A2A Server)
+uv run mail-agent a2a
+# A2A Server: 0.0.0.0:8000
+# Agent Card: http://localhost:8000/.well-known/agent.json
+
+# Mail Agent (CLI - Direct Run)
+uv run mail-agent run "send mail to raj@gmail.com asking 10 food recipes in csv file"
+
+# A2A Client (Test Client)
+python scripts/a2a_client.py info
+uv run python scripts/a2a_client.py interactive
+
+# Reply Simulator (POC Email Simulator)
+uv run python scripts/poc_reply_simulator.py --from "raj@gmail.com" --to "info-agent@gmail.com" --subject "Re: Request: 10 Actor names" --body "Please find attached." --attachment ./test_data/sample_actors.csv
 ```
 
 ### Testing
 ```bash
 pytest
-pytest --cov=src/mock_smtp --cov-report=html
+pytest --cov=src --cov-report=html
+pytest tests/test_mail_agent/  # Mail agent tests only
+pytest tests/test_models.py    # Mock SMTP tests only
 ```
 
 ## Architecture
 
 ### High-Level Design
 
-**Dual-Server Architecture:** Two concurrent async servers sharing in-memory state:
-1. **SMTP Server (aiosmtpd)** - Receives emails via SMTP protocol
-2. **REST API (FastAPI)** - HTTP interface for inspection
+**Three-Server Architecture:**
 
-**Shared State (Singleton):**
-- `InboxStore` - Thread-safe in-memory email storage
-- `WebhookRegistry` - Webhook URL registrations
-- `WebhookDispatcher` - Async HTTP client for webhook notifications
+1. **Mock SMTP Server** (Ports 1025, 8025)
+   - Receives emails via SMTP protocol
+   - REST API for email inspection
+   - Webhook notifications
 
-**Key Patterns:** Dependency Injection, Factory Pattern, Async/Await, Fire-and-Forget Webhooks
+2. **Mail Agent - A2A Server** (Port 8000)
+   - Exposes LangGraph agent via Google A2A protocol
+   - JSON-RPC 2.0 over HTTP
+   - Non-blocking task execution with SQLite persistence
+
+3. **Mail Agent - Webhook Server** (Port 9000)
+   - Receives email arrival notifications from Mock SMTP
+   - Routes webhooks to active agent tasks
+   - FastAPI + SSE streaming
+
+**Mail Agent Flow:**
+```
+User Instruction → Parse → Compose Email → Send → Wait for Reply
+                                                          ↓
+                                              Webhook triggers resume
+                                                          ↓
+                                       Fetch Email → Extract Content → Validate
+                                                          ↓
+                                              Valid? → End : Retry (max 5)
+```
+
+**Key Patterns:**
+- Dependency Injection
+- Factory Pattern
+- Async/Await
+- State Machines (LangGraph)
+- A2A Protocol (Agent-to-Agent)
+- SQLite Checkpointing (Persistence)
+- Fire-and-Forget Webhooks
 
 ### Directory Structure
 
 ```
 /workspaces/info-agent-3/
-├── src/mock_smtp/
-│   ├── main.py                 # Entrypoint, lifespan management
-│   ├── config.py               # Pydantic settings with env vars
-│   ├── store/
-│   │   ├── models.py           # Pydantic models (Email, Inbox, Attachment)
-│   │   └── inbox_store.py      # Thread-safe in-memory storage
-│   ├── webhooks/
-│   │   ├── registry.py         # Webhook URL CRUD (in-memory)
-│   │   └── dispatcher.py       # Async HTTP POST with retry/timeout
-│   ├── smtp/
-│   │   ├── server.py           # AIOSMTPD server lifecycle
-│   │   └── handler.py          # Custom SMTP handler (stores + webhooks)
-│   └── api/
-│       ├── router.py           # Router factory with dependency injection
-│       ├── inbox_routes.py     # GET/DELETE inboxes
-│       ├── email_routes.py     # GET/DELETE emails
-│       ├── send_routes.py      # POST /api/send
-│       └── webhook_routes.py   # Webhook registration CRUD
+├── src/
+│   ├── mock_smtp/              # Mock SMTP Server
+│   │   ├── main.py             # Entrypoint
+│   │   ├── config.py           # Settings
+│   │   ├── store/              # Email storage
+│   │   │   ├── models.py       # Email, Inbox, Attachment models
+│   │   │   └── inbox_store.py  # Thread-safe in-memory storage
+│   │   ├── webhooks/           # Webhook system
+│   │   │   ├── registry.py     # Webhook registration
+│   │   │   └── dispatcher.py   # HTTP POST client
+│   │   ├── smtp/               # SMTP server
+│   │   │   ├── server.py       # aiosmtpd lifecycle
+│   │   │   └── handler.py      # SMTP protocol handler
+│   │   └── api/                # REST API
+│   │       ├── router.py       # Router factory
+│   │       ├── inbox_routes.py
+│   │       ├── email_routes.py
+│   │       ├── send_routes.py
+│   │       └── webhook_routes.py
+│   │
+│   └── mail_agent/             # Mail Agent
+│       ├── main.py             # Typer CLI entrypoint
+│       ├── config.py           # Settings (LLM, SMTP, A2A)
+│       ├── agent/              # LangGraph agent
+│       │   ├── graph.py        # StateGraph definition
+│       │   ├── state.py        # AgentState model
+│       │   └── nodes/          # Graph nodes
+│       │       ├── parse_instruction.py
+│       │       ├── compose_email.py
+│       │       ├── send_email.py
+│       │       ├── wait_for_reply.py
+│       │       ├── fetch_email.py
+│       │       ├── extract_content.py
+│       │       ├── validate_response.py
+│       │       └── decide_next.py
+│       ├── llm/                # LLM integration
+│       │   ├── client.py       # Gemini/Azure OpenAI
+│       │   └── prompts.py      # System prompts
+│       ├── tools/              # Agent tools
+│       │   ├── smtp_client.py  # Mock SMTP API client
+│       │   ├── inbox_client.py # Email fetching
+│       │   └── attachment_parser.py  # CSV/Excel parser
+│       ├── webhook/            # Webhook server
+│       │   └── server.py       # FastAPI + SSE
+│       ├── persistence/        # State persistence
+│       │   ├── checkpointer.py # SQLite checkpointer
+│       │   ├── database.py     # DB initialization
+│       │   └── task_store.py   # Task metadata
+│       ├── task_manager/       # Task lifecycle
+│       │   ├── manager.py      # Task CRUD
+│       │   └── models.py       # Task models
+│       └── a2a/                # A2A protocol server
+│           ├── server.py       # Starlette + A2A SDK
+│           ├── executor.py     # Agent executor wrapper
+│           ├── agent_card.py   # Agent discovery card
+│           └── routes/
+│               └── tasks.py    # Task status endpoints
+│
 ├── tests/
-│   ├── conftest.py             # Pytest fixtures
-│   ├── test_models.py
+│   ├── conftest.py
+│   ├── test_models.py          # Mock SMTP tests
 │   ├── test_inbox_store.py
-│   └── test_api_inboxes.py
-├── .dev-resources/
-│   ├── architecture/mock-smtp-server.md
+│   ├── test_api_inboxes.py
+│   ├── test_api_send.py
+│   └── test_mail_agent/        # Mail agent tests
+│       ├── conftest.py
+│       ├── test_config.py
+│       ├── test_integration.py
+│       ├── test_a2a_server.py
+│       ├── test_a2a_executor.py
+│       ├── test_attachment_parser.py
+│       ├── test_prompts.py
+│       ├── test_state.py
+│       ├── test_nodes/
+│       ├── test_persistence/
+│       └── test_task_manager/
+│
+├── scripts/                    # Debug/test scripts
+│   ├── a2a_client.py           # A2A test client
+│   ├── poc_reply_simulator.py  # Simulates POC replies
+│   └── generate_test_data.py
+│
+├── test_data/                  # Test files (gitignored)
+├── resources/reports/          # Generated reports (gitignored)
+├── .dev-resources/             # Architecture docs
+│   ├── architecture/
+│   │   ├── mock-smtp-server.md
+│   │   ├── mail-agent.md
+│   │   ├── mail-agent-async.md
+│   │   └── mail-agent-a2a.md
 │   ├── contracts/mock-smtp.json
-│   └── prompts/mock-smtp.txt
+│   └── prompts/
 ├── pyproject.toml
+├── .env.example
 ├── README.md
 └── CLAUDE.md
 ```
 
 ### Key Components
 
-| Component | Responsibility | Key Details |
-|-----------|---------------|-------------|
-| **main.py** | Server entrypoint, lifespan | Initializes shared resources, starts SMTP + API concurrently |
-| **config.py** | Pydantic Settings | `.env` + `MOCK_SMTP_*` env vars, `@lru_cache` singleton |
-| **store/models.py** | Pydantic models | `Email`, `Inbox`, `Attachment`, `EmailSummary`, `InboxSummary` |
-| **store/inbox_store.py** | Thread-safe storage | `threading.Lock`, FIFO eviction, `max_emails_per_inbox` limit |
-| **webhooks/registry.py** | Webhook storage | In-memory `WebhookRegistration` (URL + inbox filter) |
-| **webhooks/dispatcher.py** | HTTP webhook sender | Async `httpx`, retry with exponential backoff, timeout handling |
-| **smtp/server.py** | SMTP server wrapper | Manages aiosmtpd lifecycle |
-| **smtp/handler.py** | SMTP protocol handler | Parses MIME, extracts attachments, stores emails, triggers webhooks |
-| **api/router.py** | Router factory | Dependency injection for testing |
-| **api/*_routes.py** | REST endpoints | Inbox/email CRUD, send, webhook management |
+#### Mock SMTP Server
 
-#### Email Models (store/models.py)
+| Component | Responsibility |
+|-----------|---------------|
+| **main.py** | Initializes shared resources, starts SMTP + API concurrently |
+| **config.py** | Pydantic Settings with `MOCK_SMTP_*` env vars |
+| **store/inbox_store.py** | Thread-safe in-memory storage, FIFO eviction |
+| **smtp/handler.py** | Parses MIME, extracts attachments, stores emails, triggers webhooks |
+| **webhooks/dispatcher.py** | Async httpx client with retry + exponential backoff |
+| **api/router.py** | Router factory with dependency injection |
 
-**Email:** `id`, `from_address`, `to_addresses`, `subject`, `body_text`, `body_html`, `attachments`, `headers`, `received_at`, `raw_content`
+#### Mail Agent
 
-**Inbox:** `email_address`, `emails[]`, `created_at`, `last_email_at` + methods: `add_email()`, `get_email_by_id()`, `delete_email()`, `clear()`
+| Component | Responsibility |
+|-----------|---------------|
+| **main.py** | Typer CLI with `run` and `a2a` commands |
+| **config.py** | Pydantic Settings with `MAIL_AGENT_*` env vars, supports Gemini + Azure OpenAI |
+| **agent/graph.py** | StateGraph with nodes: parse → compose → send → wait → fetch → extract → validate → decide |
+| **agent/state.py** | AgentState model (instruction, conversations, attempts, errors, etc.) |
+| **llm/client.py** | LLM client factory, supports Gemini (default) and Azure OpenAI |
+| **tools/smtp_client.py** | Async httpx client for Mock SMTP API |
+| **tools/attachment_parser.py** | Parses CSV/Excel attachments with openpyxl |
+| **webhook/server.py** | FastAPI webhook receiver, SSE streaming for task updates |
+| **persistence/checkpointer.py** | SQLite-based LangGraph checkpointer for state persistence |
+| **task_manager/manager.py** | Task lifecycle (create, update, get, list) |
+| **a2a/server.py** | Starlette app with A2A SDK, non-blocking execution |
+| **a2a/executor.py** | Wraps LangGraph agent, handles task lifecycle |
 
-**Attachment:** `filename`, `content_type`, `size_bytes`, `content_base64` + factory: `Attachment.from_bytes()`
+### Mail Agent State Machine
 
-#### InboxStore Methods
+**AgentState Fields:**
+- `instruction` - User instruction (e.g., "send mail to x@y.com asking 10 recipes")
+- `conversations` - Dict[poc_email, ConversationState] tracking each POC interaction
+- `current_poc` - Current POC being processed
+- `progress_messages` - User-facing progress updates
+- `error` - Error message if any
+- `webhook_id` - Registered webhook ID
 
-- `store_email(email)` - Store in all recipient inboxes
-- `get_inbox(email_address)` - Get or create inbox
-- `get_email(email_address, email_id)` - Fetch specific email
-- `delete_email(email_address, email_id)` - Delete email
-- `clear_inbox(email_address)` - Delete all emails in inbox
-- `clear_all()` - Reset entire store
+**ConversationState Fields:**
+- `poc_email` - POC email address
+- `status` - pending/waiting/completed/failed
+- `attempt_count` - Current attempt number (max 5)
+- `sent_emails` - List of sent email IDs
+- `received_emails` - List of received email IDs
+- `validation_results` - List of validation outcomes
+- `final_result` - valid/invalid/error/pending
+- `attachments` - List of parsed attachments
 
-**Thread Safety:** All modifications inside `with self._lock:`
+**Node Flow:**
+1. **parse_instruction** - Extract POC emails and requirements from instruction
+2. **compose_email** - Generate email content using LLM
+3. **send_email** - Send via Mock SMTP API
+4. **wait_for_reply** - Interrupt, wait for webhook notification
+5. **fetch_email** - Retrieve reply from Mock SMTP
+6. **extract_content** - Parse attachments (CSV/Excel)
+7. **validate_response** - Verify response meets requirements using LLM
+8. **decide_next** - Retry if invalid (max 5 attempts) or end
 
-#### Webhook Payload
+### A2A Protocol Integration
 
+**Endpoints:**
+- `GET /.well-known/agent.json` - Agent discovery card (RFC 8615)
+- `POST /jsonrpc` - JSON-RPC 2.0 endpoint for task execution
+- `GET /api/tasks` - List all tasks
+- `GET /api/tasks/{task_id}` - Get task status + SSE streaming
+
+**Agent Card:**
 ```json
 {
-  "event": "email.received",
-  "email_id": "uuid",
-  "from": "sender@example.com",
-  "to": ["recipient@example.com"],
-  "subject": "Email subject",
-  "has_attachments": true,
-  "attachment_count": 2,
-  "received_at": "2025-12-14T10:30:00.000000",
-  "body_preview": "First 100 chars..."
+  "name": "Mail Agent",
+  "version": "1.0.0",
+  "description": "Intelligent email assistant powered by LangGraph",
+  "url": "http://localhost:8000",
+  "capabilities": ["email_request", "data_validation", "attachment_parsing"]
 }
 ```
 
-**HTTP Headers:** `Content-Type`, `X-Webhook-Event`, `X-Email-ID`, `X-Webhook-Timestamp`
-
-**Retry:** Timeout → retry with backoff, HTTP error → fail, network error → retry
-
-#### SMTP Handler Flow
-
-1. Receive envelope (sender, recipients, MIME)
-2. Parse MIME using `email.message_from_bytes()`
-3. Extract headers, body, attachments
-4. Validate attachment sizes
-5. Create `Email` instance
-6. Store in `InboxStore`
-7. Trigger webhooks (async, fire-and-forget)
-8. Return "250 OK"
+**Task Execution:**
+- Non-blocking: Task runs in background
+- Persistent: State saved to SQLite
+- Resumable: Can interrupt and resume on webhook
+- SSE Streaming: Real-time progress updates
 
 ## Configuration
 
 ### Environment Variables
 
-All settings use `MOCK_SMTP_*` prefix:
+#### Mock SMTP Server (`MOCK_SMTP_*`)
 
 ```bash
 MOCK_SMTP_SMTP_HOST=localhost          # Default: localhost
@@ -161,118 +300,179 @@ MOCK_SMTP_WEBHOOK_MAX_RETRIES=3        # Default: 3
 MOCK_SMTP_LOG_LEVEL=INFO               # Default: INFO
 ```
 
-Create `.env` in project root (gitignored) to override defaults.
+#### Mail Agent (`MAIL_AGENT_*`)
+
+```bash
+# Mock SMTP Connection
+MAIL_AGENT_MOCK_SMTP_API_URL=http://localhost:8025
+MAIL_AGENT_MOCK_SMTP_HOST=localhost
+MAIL_AGENT_MOCK_SMTP_PORT=1025
+
+# Agent Identity
+MAIL_AGENT_AGENT_EMAIL=info-agent@gmail.com
+
+# Webhook Server
+MAIL_AGENT_WEBHOOK_HOST=localhost
+MAIL_AGENT_WEBHOOK_PORT=9000
+MAIL_AGENT_WEBHOOK_PATH=/webhook/email-received
+
+# LLM (Gemini default)
+MAIL_AGENT_LLM_PROVIDER=gemini  # or "azure-openai"
+MAIL_AGENT_GEMINI_API_KEY=your-key
+MAIL_AGENT_GEMINI_MODEL=gemini-2.5-flash
+MAIL_AGENT_LLM_TEMPERATURE=0.0
+MAIL_AGENT_LLM_MAX_TOKENS=4096
+
+# Azure OpenAI (alternative)
+# MAIL_AGENT_AZURE_OPENAI_API_KEY=your-key
+# MAIL_AGENT_AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+# MAIL_AGENT_AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4
+# MAIL_AGENT_AZURE_OPENAI_API_VERSION=2024-02-15-preview
+
+# Agent Behavior
+MAIL_AGENT_MAX_ATTEMPTS=5
+
+# State Persistence
+MAIL_AGENT_SQLITE_DB_PATH=./mail_agent_state.db
+
+# A2A Server
+MAIL_AGENT_A2A_HOST=0.0.0.0
+MAIL_AGENT_A2A_PORT=8000
+MAIL_AGENT_A2A_AGENT_NAME=Mail Agent
+MAIL_AGENT_A2A_AGENT_VERSION=1.0.0
+
+# Logging
+MAIL_AGENT_LOG_LEVEL=INFO
+```
 
 ## Key Files Reference
 
 | File | Purpose | Modify When |
 |------|---------|-------------|
-| `main.py` | Server entrypoint | Adding shared resources |
-| `config.py` | Settings | Adding config options |
-| `store/models.py` | Data models | Changing email/inbox structure |
-| `store/inbox_store.py` | Storage logic | Changing storage behavior |
-| `smtp/handler.py` | SMTP processing | Changing email parsing |
-| `webhooks/dispatcher.py` | Webhook client | Changing webhook payload/behavior |
-| `api/router.py` | Router factory | Adding route modules |
-| `api/*_routes.py` | API endpoints | Adding endpoints |
-| `tests/*` | Test suite | Adding features (TDD) |
+| **Mock SMTP** | | |
+| `mock_smtp/main.py` | Server entrypoint | Adding shared resources |
+| `mock_smtp/store/inbox_store.py` | Storage logic | Changing storage behavior |
+| `mock_smtp/smtp/handler.py` | Email parsing | Changing MIME handling |
+| `mock_smtp/api/*_routes.py` | API endpoints | Adding endpoints |
+| **Mail Agent** | | |
+| `mail_agent/main.py` | CLI entrypoint | Adding commands |
+| `mail_agent/config.py` | Settings | Adding config options |
+| `mail_agent/agent/graph.py` | State graph | Adding/removing nodes |
+| `mail_agent/agent/nodes/*.py` | Graph nodes | Changing agent behavior |
+| `mail_agent/llm/prompts.py` | LLM prompts | Changing prompt templates |
+| `mail_agent/tools/attachment_parser.py` | Attachment parsing | Adding file formats |
+| `mail_agent/a2a/server.py` | A2A server | Changing A2A integration |
+| `mail_agent/persistence/checkpointer.py` | State persistence | Changing persistence logic |
 
 ## Development Patterns
 
-### Adding API Endpoint
+### Adding LangGraph Node
 
-1. Create route in `api/*_routes.py` (or new file)
-2. Use dependency injection from router factory
-3. Add tests in `tests/test_api_*.py`
-4. Update OpenAPI: `curl http://localhost:8025/openapi.json > .dev-resources/contracts/mock-smtp.json`
+1. Create `agent/nodes/my_node.py` with function signature: `def my_node(state: AgentState) -> AgentState`
+2. Import in `agent/nodes/__init__.py`
+3. Add to graph in `agent/graph.py`: `.add_node("my_node", my_node)`
+4. Add edge: `.add_edge("previous_node", "my_node")`
+5. Add tests in `tests/test_mail_agent/test_nodes/test_my_node.py`
+
+### Adding LLM Prompt
+
+1. Add template to `llm/prompts.py` (use `PromptTemplate` or `ChatPromptTemplate`)
+2. Export in `llm/__init__.py`
+3. Use in node: `prompt.format(**kwargs)`
 
 ### Adding Configuration
 
 1. Add field to `Settings` in `config.py` with `Field()` descriptor
 2. Add validation if needed (`@field_validator`)
-3. Update architecture docs and README
-
-### Adding Pydantic Model
-
-1. Define in `store/models.py` with `Field()` descriptions
-2. Export in `store/__init__.py`
-3. Add tests in `tests/test_models.py`
-
-### Modifying InboxStore
-
-**Critical:** Preserve thread safety - all modifications inside `with self._lock:`
+3. Update `.env.example`
+4. Update CLAUDE.md Configuration section
 
 ### Testing
 
-**Unit Tests:** Isolated components
-**Integration Tests:** API endpoints (use FastAPI `TestClient`)
-
-**Fixtures (conftest.py):** `inbox_store`, `webhook_registry`, `sample_email`
+**Unit Tests:** Isolated components (use pytest fixtures)
+**Integration Tests:** End-to-end flows (use TestClient for APIs)
+**Fixtures:** Defined in `conftest.py` at root and `test_mail_agent/conftest.py`
 
 ## Anti-Patterns to Avoid
 
-1. **No persistent storage** - In-memory is intentional (testing tool)
-2. **No authentication** - Open relay by design
-3. **No blocking webhooks** - Fire-and-forget is intentional
-4. **No retry on failed storage** - SMTP should return error
-5. **No global variables** - Use dependency injection
-6. **No complex routing** - Keep it simple (mock server)
+1. **No persistent storage in Mock SMTP** - In-memory is intentional
+2. **No blocking webhooks** - Fire-and-forget by design
+3. **No global LLM client** - Use dependency injection via config
+4. **No direct state mutation** - Return new state dict from nodes
+5. **No hardcoded POC emails** - Extract from instruction
+6. **No missing locks in InboxStore** - Always `with self._lock:`
 
 ## Important Constraints
 
 ### Fail-Fast Behavior
 
+**Mock SMTP:**
 - Invalid config → `ValueError` on startup
 - Attachment too large → SMTP 552 error
-- Inbox full → FIFO eviction (oldest emails)
-- Webhook failure → log only, don't block storage
+- Inbox full → FIFO eviction
+
+**Mail Agent:**
+- No LLM API key → Raise exception on startup
+- Mock SMTP unreachable → Warning, continue anyway
+- Max attempts reached → Mark conversation as failed
+- Invalid instruction → Error in parse_instruction node
 
 ### Error Handling
 
-**SMTP:** Catch all exceptions, log, return SMTP error code (never crash)
-**API:** FastAPI/Pydantic validation (422), 404 for not found, 500 for unexpected
-**Webhooks:** Log failures, no retry storage, async fire-and-forget
+**Mock SMTP:**
+- SMTP: Catch all exceptions, log, return SMTP error code
+- API: FastAPI/Pydantic validation (422), 404, 500
+- Webhooks: Log failures, don't block storage
+
+**Mail Agent:**
+- Nodes: Return error in state, don't raise exceptions
+- LLM failures: Log and retry (handled by LangChain)
+- Webhook timeout: Continue waiting (configurable timeout)
+- A2A executor: Catch all exceptions, update task status
 
 ### Data Access
 
-**Never bypass InboxStore:**
+**InboxStore (Mock SMTP):**
 ```python
 # BAD: inbox_store._inboxes[email].emails.append(email)
 # GOOD: inbox_store.store_email(email)
 ```
 
-**Always use locks:**
+**AgentState (Mail Agent):**
 ```python
-# BAD: self.emails.append(email)
-# GOOD: with self._lock: self.emails.append(email)
+# BAD: state["conversations"][poc]["status"] = "waiting"
+# GOOD: return {"conversations": updated_conversations}
 ```
 
 ### Logging
 
-- **DEBUG** - Detailed flow (webhook retries, MIME parsing)
-- **INFO** - Important events (email received, server start/stop)
-- **WARNING** - Recoverable issues (webhook timeout)
-- **ERROR** - Failures (webhook failed, parse error)
-- **CRITICAL** - Server failures
+- **DEBUG** - Detailed flow (LLM requests, webhook routing)
+- **INFO** - Important events (email sent, task created, node transitions)
+- **WARNING** - Recoverable issues (webhook timeout, retry attempt)
+- **ERROR** - Failures (validation failed, LLM error)
+- **CRITICAL** - Server failures (startup errors)
 
 ### Memory Management
 
-- `max_emails_per_inbox` prevents unbounded growth
+**Mock SMTP:**
+- `max_emails_per_inbox=1000` prevents unbounded growth
 - FIFO eviction when limit reached
-- Size validation during SMTP receipt only
+
+**Mail Agent:**
+- SQLite checkpoints prevent in-memory state growth
+- Attachment content stored as base64 (consider limits)
 
 ## Testing Checklist
 
 Before submitting changes:
 
 - [ ] All tests pass: `pytest`
-- [ ] Coverage maintained: `pytest --cov=src/mock_smtp --cov-report=term-missing`
+- [ ] Coverage maintained: `pytest --cov=src --cov-report=term-missing`
 - [ ] No files exceed 800 lines
 - [ ] Logging added for new operations
-- [ ] Environment variables documented (if added)
+- [ ] Environment variables documented in `.env.example`
 - [ ] README.md updated (if user-facing changes)
-- [ ] Architecture doc updated (if structural changes)
-- [ ] API contract updated: `curl http://localhost:8025/openapi.json > .dev-resources/contracts/mock-smtp.json`
+- [ ] Architecture docs updated (if structural changes)
 
 ## Contributing
 
@@ -281,5 +481,5 @@ Follow coding guidelines from `/root/.claude/CLAUDE.md`:
 - Strict test-driven development
 - Comprehensive logging
 - No fallback/default values (raise exceptions)
-- Update README.md for user-facing changes
 - Test data in `test_data/`, debug scripts in `scripts/`
+- Update documentation for user-facing changes
