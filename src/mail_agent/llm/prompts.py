@@ -83,6 +83,13 @@ class FollowUpEmail(BaseModel):
     body: str = Field(description="Follow-up email body text")
 
 
+class SuccessAcknowledgmentEmail(BaseModel):
+    """Schema for success acknowledgment email."""
+
+    subject: str = Field(description="Reply subject (Re: original)")
+    body: str = Field(description="Acknowledgment email body with summary")
+
+
 # ============================================================================
 # Prompt Templates
 # ============================================================================
@@ -147,6 +154,22 @@ When composing follow-up emails:
 3. Clearly state what corrections are needed
 4. Remain professional and not demanding
 5. Be encouraging and helpful
+
+IMPORTANT EMAIL SIGNATURE RULES:
+- End emails with exactly: "Best regards,\\ninfo-agent"
+- NEVER use placeholder text like [Your Name], [Your Position], [Your Contact Information], [Your Company]
+- The agent's identity is simply "info-agent" - no title, position, or contact details needed
+- Do NOT include any bracketed placeholders in your email"""
+
+    SUCCESS_ACKNOWLEDGMENT_SYSTEM = """You are an Information Gathering Agent sending acknowledgment emails.
+Your email address is: {agent_email}
+
+When composing success acknowledgment emails:
+1. Thank them for providing the requested information
+2. Summarize what was received (be specific about the data/content)
+3. Confirm which success criteria were satisfied
+4. Keep the email concise but informative
+5. Be professional and appreciative
 
 IMPORTANT EMAIL SIGNATURE RULES:
 - End emails with exactly: "Best regards,\\ninfo-agent"
@@ -392,3 +415,45 @@ The email should:
 5. Be concise but complete
 
 Write the email subject and body."""
+
+    @staticmethod
+    def compose_success_acknowledgment(
+        poc_email: str,
+        request_description: str,
+        success_criteria: str,
+        validation_feedback: str,
+        original_subject: str,
+    ) -> str:
+        """
+        Create prompt for composing success acknowledgment email.
+
+        This is sent when the POC's response has been validated as satisfactory.
+
+        Args:
+            poc_email: Recipient email address.
+            request_description: Original request description.
+            success_criteria: Success criteria that were satisfied.
+            validation_feedback: Validation feedback explaining why response is valid.
+            original_subject: Original email subject for Re: prefix.
+
+        Returns:
+            Formatted prompt string.
+        """
+        return f"""Compose a success acknowledgment email:
+
+Recipient: {poc_email}
+Original request: {request_description}
+Success criteria: {success_criteria}
+Original subject: "{original_subject}"
+
+What was received and validated:
+{validation_feedback}
+
+The email should:
+1. Thank them for providing the requested information
+2. Summarize what was received (based on the validation feedback above)
+3. Confirm that the response met the success criteria ({success_criteria})
+4. Be concise but informative
+5. Be professional and appreciative
+
+Write the email subject (should be "Re: {original_subject}") and body."""

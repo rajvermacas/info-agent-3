@@ -25,6 +25,8 @@ from mail_agent.agent.nodes.decide_next import (
     prepare_followup,
 )
 from mail_agent.agent.nodes.handle_redirect import handle_redirect
+from mail_agent.agent.nodes.compose_success_reply import compose_success_reply
+from mail_agent.agent.nodes.send_success_reply import send_success_reply
 
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,10 @@ def create_mail_agent_graph() -> StateGraph:
               -> [handle_success | handle_failure | prepare_followup | handle_redirect]
               -> END (or loop back to compose_email for followup/redirect)
 
+    Success Flow:
+        When POC's response is validated as satisfactory:
+        validate_response -> handle_success -> compose_success_reply -> send_success_reply -> END
+
     Redirect Flow:
         When a POC responds with "I'm not the right contact, email xyz@abc.com":
         validate_response -> handle_redirect -> compose_email (for new POC)
@@ -134,6 +140,10 @@ def create_mail_agent_graph() -> StateGraph:
     graph.add_node("handle_failure", handle_failure)
     graph.add_node("prepare_followup", prepare_followup)
     graph.add_node("handle_redirect", handle_redirect)
+
+    # Phase 5: Success acknowledgment
+    graph.add_node("compose_success_reply", compose_success_reply)
+    graph.add_node("send_success_reply", send_success_reply)
 
     # ========================================================================
     # Add Edges
@@ -171,8 +181,12 @@ def create_mail_agent_graph() -> StateGraph:
         },
     )
 
-    # Terminal states -> End
-    graph.add_edge("handle_success", END)
+    # Success path -> Compose and send acknowledgment -> End
+    graph.add_edge("handle_success", "compose_success_reply")
+    graph.add_edge("compose_success_reply", "send_success_reply")
+    graph.add_edge("send_success_reply", END)
+
+    # Failure -> End
     graph.add_edge("handle_failure", END)
 
     # Followup -> Back to compose
