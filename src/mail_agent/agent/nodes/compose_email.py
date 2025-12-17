@@ -58,10 +58,47 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
         settings = get_settings()
         llm_client = LLMClient(settings)
 
+        # Check if this is a cross-POC follow-up (from prepare_targeted_followup)
+        conv_dict = state.get("conversations", {}).get(current_poc, {})
+        cross_poc_followup_context = conv_dict.get("_cross_poc_followup_context")
+
         # Determine if this is initial or follow-up email
         is_followup = conversation.attempt_count > 0
+        is_cross_poc_followup = cross_poc_followup_context is not None and cross_poc_followup_context.get("is_cross_poc_followup", False)
 
-        if is_followup:
+        if is_cross_poc_followup:
+            # Compose cross-POC follow-up email
+            logger.info(f"Composing CROSS-POC follow-up email for {current_poc}")
+
+            original_subject = (
+                conversation.sent_emails[-1].subject
+                if conversation.sent_emails
+                else "Request"
+            )
+
+            prompt = PromptTemplates.compose_cross_poc_followup(
+                poc_email=current_poc,
+                request_description=parsed_request.request_description,
+                cross_poc_issues=cross_poc_followup_context.get("issues", []),
+                missing_items=cross_poc_followup_context.get("missing_items", []),
+                related_pocs=cross_poc_followup_context.get("related_pocs", []),
+                original_subject=original_subject,
+            )
+
+            # Format system prompt with agent email identity
+            followup_system_prompt = PromptTemplates.FOLLOWUP_SYSTEM.format(
+                agent_email=settings.agent_email
+            )
+
+            composed = await llm_client.generate_structured(
+                prompt=prompt,
+                output_schema=FollowUpEmail,
+                system_prompt=followup_system_prompt,
+            )
+
+            logger.info(f"Composed cross-POC follow-up email: subject={composed.subject}")
+
+        elif is_followup:
             # Compose follow-up email
             logger.info(f"Composing follow-up email (attempt {conversation.attempt_count + 1})")
 
@@ -146,8 +183,16 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
         # The actual SentEmail record will be created after successful send
         conversation.status = "sending"
 
+        # Build progress message based on email type
+        if is_cross_poc_followup:
+            email_type = "Cross-POC follow-up"
+        elif is_followup:
+            email_type = "Follow-up"
+        else:
+            email_type = "Initial"
+
         progress_msg = (
-            f"{'Follow-up' if is_followup else 'Initial'} email composed for {current_poc}: "
+            f"{email_type} email composed for {current_poc}: "
             f"'{composed.subject}'"
         )
 

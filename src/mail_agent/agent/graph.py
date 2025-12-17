@@ -2,7 +2,10 @@
 LangGraph State Machine - Mail Agent graph definition.
 
 Defines the complete state machine for the mail agent workflow.
-Includes support for email redirects when POC suggests another contact.
+Supports multiple POCs (Points of Contact) with:
+- Sequential processing of each POC
+- Cross-POC validation for complementary data
+- Targeted follow-ups for specific POCs with missing data
 """
 
 import logging
@@ -10,7 +13,7 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from mail_agent.agent.state import AgentState, all_conversations_complete
+from mail_agent.agent.state import AgentState, all_conversations_complete, get_active_poc
 from mail_agent.agent.nodes.parse_instruction import parse_instruction
 from mail_agent.agent.nodes.compose_email import compose_email
 from mail_agent.agent.nodes.send_email import send_email
@@ -27,6 +30,8 @@ from mail_agent.agent.nodes.decide_next import (
 from mail_agent.agent.nodes.handle_redirect import handle_redirect
 from mail_agent.agent.nodes.compose_success_reply import compose_success_reply
 from mail_agent.agent.nodes.send_success_reply import send_success_reply
+from mail_agent.agent.nodes.select_next_poc import select_next_poc
+from mail_agent.agent.nodes.check_more_pocs import check_more_pocs
 
 
 logger = logging.getLogger(__name__)
@@ -37,8 +42,15 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def route_after_parse(state: AgentState) -> Literal["compose_email", "end"]:
-    """Route after parsing instruction."""
+def route_after_parse(
+    state: AgentState,
+) -> Literal["select_next_poc", "end"]:
+    """
+    Route after parsing instruction.
+
+    Routes to select_next_poc to pick the first POC for processing,
+    or to end if there's an error or no POCs parsed.
+    """
     error = state.get("error")
     if error:
         logger.debug("Routing after parse: error -> end")
@@ -49,8 +61,33 @@ def route_after_parse(state: AgentState) -> Literal["compose_email", "end"]:
         logger.debug("Routing after parse: no request -> end")
         return "end"
 
-    logger.debug("Routing after parse: -> compose_email")
-    return "compose_email"
+    # Check if we have any POCs to process
+    poc_emails = parsed_request.get("poc_emails", [])
+    if not poc_emails:
+        logger.debug("Routing after parse: no POCs -> end")
+        return "end"
+
+    logger.debug(f"Routing after parse: {len(poc_emails)} POC(s) -> select_next_poc")
+    return "select_next_poc"
+
+
+def route_after_select_next_poc(
+    state: AgentState,
+) -> Literal["compose_email", "validate_cross_poc"]:
+    """
+    Route after selecting next POC.
+
+    If a POC was selected (current_poc is set), route to compose_email.
+    If no POC available (all complete), route to cross-POC validation.
+    """
+    current_poc = state.get("current_poc")
+
+    if current_poc:
+        logger.debug(f"Routing after select_next_poc: POC {current_poc} -> compose_email")
+        return "compose_email"
+    else:
+        logger.debug("Routing after select_next_poc: no more POCs -> validate_cross_poc")
+        return "validate_cross_poc"
 
 
 def route_after_validation(
@@ -69,22 +106,42 @@ def route_after_validation(
         return "prepare_followup"
 
 
-def route_after_terminal(state: AgentState) -> Literal["end"]:
+def route_after_check_more_pocs(
+    state: AgentState,
+) -> Literal["select_next_poc", "validate_cross_poc"]:
     """
-    Route after terminal state (success/failure).
+    Route after checking if more POCs need processing.
 
-    For now, we only support single POC, so always go to end.
-    For multi-POC support, this would check if other POCs need processing.
+    If more POCs are pending, route to select_next_poc.
+    If all POCs have reached terminal states, route to cross-POC validation.
     """
-    # Check if all conversations are complete
-    if all_conversations_complete(state):
-        logger.debug("All conversations complete -> end")
-        return "end"
+    all_complete = state.get("_all_pocs_individual_complete", False)
 
-    # For multi-POC support (future):
-    # Would return to compose_email for next POC
-    logger.debug("Routing to end (single POC mode)")
-    return "end"
+    if all_complete:
+        logger.debug("Routing after check_more_pocs: all complete -> validate_cross_poc")
+        return "validate_cross_poc"
+    else:
+        logger.debug("Routing after check_more_pocs: more pending -> select_next_poc")
+        return "select_next_poc"
+
+
+def route_after_cross_poc_validation(
+    state: AgentState,
+) -> Literal["compose_success_all", "prepare_targeted_followup"]:
+    """
+    Route after cross-POC validation.
+
+    If all data is valid across POCs, route to success acknowledgment.
+    If issues found, route to targeted follow-up preparation.
+    """
+    is_valid = state.get("_cross_poc_is_valid", True)
+
+    if is_valid:
+        logger.debug("Routing after cross-POC validation: valid -> compose_success_all")
+        return "compose_success_all"
+    else:
+        logger.debug("Routing after cross-POC validation: issues -> prepare_targeted_followup")
+        return "prepare_targeted_followup"
 
 
 # ============================================================================
@@ -94,26 +151,42 @@ def route_after_terminal(state: AgentState) -> Literal["end"]:
 
 def create_mail_agent_graph() -> StateGraph:
     """
-    Create the mail agent LangGraph state machine.
+    Create the mail agent LangGraph state machine with multi-POC support.
 
     Returns:
         Compiled StateGraph ready for execution.
 
-    Graph Structure:
-        START -> parse_instruction -> compose_email -> send_email -> wait_for_reply
+    Graph Structure (Multi-POC Flow):
+        START -> parse_instruction -> select_next_poc
+              -> compose_email -> send_email -> wait_for_reply
               -> fetch_email -> extract_content -> validate_response
               -> [handle_success | handle_failure | prepare_followup | handle_redirect]
-              -> END (or loop back to compose_email for followup/redirect)
+              -> check_more_pocs
+              -> [select_next_poc (if more pending) | validate_cross_poc (if all complete)]
+              -> [compose_success_all | prepare_targeted_followup]
+              -> END
 
-    Success Flow:
-        When POC's response is validated as satisfactory:
-        validate_response -> handle_success -> compose_success_reply -> send_success_reply -> END
+    Multi-POC Processing:
+        1. parse_instruction: Parse all POCs from user instruction
+        2. select_next_poc: Pick next pending POC (loop entry point)
+        3. Process single POC through email flow
+        4. handle_success/failure: Mark POC conversation as complete
+        5. check_more_pocs: Check if more POCs need processing
+        6. Loop back to select_next_poc OR proceed to cross-POC validation
 
-    Redirect Flow:
-        When a POC responds with "I'm not the right contact, email xyz@abc.com":
-        validate_response -> handle_redirect -> compose_email (for new POC)
+    Cross-POC Validation:
+        After all individual POCs complete, validate_cross_poc checks:
+        - Referential integrity between data from different POCs
+        - Data completeness when POCs provide complementary information
+        - Example: employee.dept_id must exist in department data from another POC
+
+    Targeted Follow-ups:
+        If cross-POC validation fails, prepare_targeted_followup:
+        - Identifies which specific POC(s) need to provide missing data
+        - Resets those POCs for re-processing
+        - Does NOT bother POCs whose data is already complete
     """
-    logger.info("Creating mail agent graph")
+    logger.info("Creating mail agent graph with multi-POC support")
 
     # Create graph with state schema
     graph = StateGraph(AgentState)
@@ -125,23 +198,42 @@ def create_mail_agent_graph() -> StateGraph:
     # Phase 1: Parse user instruction
     graph.add_node("parse_instruction", parse_instruction)
 
-    # Phase 2: Compose and send email
+    # Phase 2: Multi-POC iteration
+    graph.add_node("select_next_poc", select_next_poc)
+    graph.add_node("check_more_pocs", check_more_pocs)
+
+    # Phase 3: Compose and send email (for current POC)
     graph.add_node("compose_email", compose_email)
     graph.add_node("send_email", send_email)
 
-    # Phase 3: Wait for and process reply
+    # Phase 4: Wait for and process reply
     graph.add_node("wait_for_reply", wait_for_reply)
     graph.add_node("fetch_email", fetch_email)
     graph.add_node("extract_content", extract_content)
     graph.add_node("validate_response", validate_response)
 
-    # Phase 4: Handle result
+    # Phase 5: Handle individual POC result
     graph.add_node("handle_success", handle_success)
     graph.add_node("handle_failure", handle_failure)
     graph.add_node("prepare_followup", prepare_followup)
     graph.add_node("handle_redirect", handle_redirect)
 
-    # Phase 5: Success acknowledgment
+    # Phase 6: Cross-POC validation (after all individual POCs complete)
+    # Placeholder - will be implemented in Phase 2
+    from mail_agent.agent.nodes.validate_cross_poc import validate_cross_poc
+    graph.add_node("validate_cross_poc", validate_cross_poc)
+
+    # Phase 7: Final result handling
+    # Placeholder - will be implemented in Phase 4
+    from mail_agent.agent.nodes.compose_success_all import compose_success_all
+    from mail_agent.agent.nodes.send_success_all import send_success_all
+    from mail_agent.agent.nodes.prepare_targeted_followup import prepare_targeted_followup
+    graph.add_node("compose_success_all", compose_success_all)
+    graph.add_node("send_success_all", send_success_all)
+    graph.add_node("prepare_targeted_followup", prepare_targeted_followup)
+
+    # Legacy nodes for single-POC success acknowledgment
+    # (kept for prepare_followup -> single POC retry flow)
     graph.add_node("compose_success_reply", compose_success_reply)
     graph.add_node("send_success_reply", send_success_reply)
 
@@ -152,13 +244,23 @@ def create_mail_agent_graph() -> StateGraph:
     # Start -> Parse
     graph.add_edge(START, "parse_instruction")
 
-    # Parse -> Compose (conditional)
+    # Parse -> Select Next POC (conditional on having POCs)
     graph.add_conditional_edges(
         "parse_instruction",
         route_after_parse,
         {
-            "compose_email": "compose_email",
+            "select_next_poc": "select_next_poc",
             "end": END,
+        },
+    )
+
+    # Select Next POC -> Compose Email OR Cross-POC Validation
+    graph.add_conditional_edges(
+        "select_next_poc",
+        route_after_select_next_poc,
+        {
+            "compose_email": "compose_email",
+            "validate_cross_poc": "validate_cross_poc",
         },
     )
 
@@ -181,21 +283,53 @@ def create_mail_agent_graph() -> StateGraph:
         },
     )
 
-    # Success path -> Compose and send acknowledgment -> End
-    graph.add_edge("handle_success", "compose_success_reply")
+    # After individual POC terminal state -> Check for more POCs
+    # Success path: check if more POCs before final acknowledgment
+    graph.add_edge("handle_success", "check_more_pocs")
+
+    # Failure path: check if more POCs (one POC failing doesn't stop others)
+    graph.add_edge("handle_failure", "check_more_pocs")
+
+    # Redirect path: check if more POCs (redirect creates new conversation)
+    graph.add_edge("handle_redirect", "check_more_pocs")
+
+    # Followup -> Back to compose (same POC, retry)
+    graph.add_edge("prepare_followup", "compose_email")
+
+    # Check More POCs -> Select Next OR Cross-POC Validation
+    graph.add_conditional_edges(
+        "check_more_pocs",
+        route_after_check_more_pocs,
+        {
+            "select_next_poc": "select_next_poc",
+            "validate_cross_poc": "validate_cross_poc",
+        },
+    )
+
+    # Cross-POC Validation -> Success All OR Targeted Followup
+    graph.add_conditional_edges(
+        "validate_cross_poc",
+        route_after_cross_poc_validation,
+        {
+            "compose_success_all": "compose_success_all",
+            "prepare_targeted_followup": "prepare_targeted_followup",
+        },
+    )
+
+    # Success All -> Send Success All -> End
+    graph.add_edge("compose_success_all", "send_success_all")
+    graph.add_edge("send_success_all", END)
+
+    # Targeted Followup -> Back to Select Next POC (for re-processing)
+    graph.add_edge("prepare_targeted_followup", "select_next_poc")
+
+    # Legacy single-POC success reply edges (kept for backward compatibility)
+    # These are no longer directly reachable in the new flow
+    # but kept in case they're referenced elsewhere
     graph.add_edge("compose_success_reply", "send_success_reply")
     graph.add_edge("send_success_reply", END)
 
-    # Failure -> End
-    graph.add_edge("handle_failure", END)
-
-    # Followup -> Back to compose
-    graph.add_edge("prepare_followup", "compose_email")
-
-    # Redirect -> Back to compose (for new POC)
-    graph.add_edge("handle_redirect", "compose_email")
-
-    logger.info("Mail agent graph created successfully")
+    logger.info("Mail agent graph with multi-POC support created successfully")
     return graph
 
 

@@ -20,7 +20,16 @@ from mail_agent.agent.nodes.handle_redirect import handle_redirect
 from mail_agent.agent.nodes.compose_success_reply import compose_success_reply
 from mail_agent.agent.nodes.send_success_reply import send_success_reply
 
+# Multi-POC support nodes
+from mail_agent.agent.nodes.select_next_poc import select_next_poc
+from mail_agent.agent.nodes.check_more_pocs import check_more_pocs
+from mail_agent.agent.nodes.validate_cross_poc import validate_cross_poc
+from mail_agent.agent.nodes.compose_success_all import compose_success_all
+from mail_agent.agent.nodes.send_success_all import send_success_all
+from mail_agent.agent.nodes.prepare_targeted_followup import prepare_targeted_followup
+
 __all__ = [
+    # Original nodes
     "parse_instruction",
     "compose_email",
     "send_email",
@@ -36,4 +45,11 @@ __all__ = [
     "handle_redirect",
     "compose_success_reply",
     "send_success_reply",
+    # Multi-POC support nodes
+    "select_next_poc",
+    "check_more_pocs",
+    "validate_cross_poc",
+    "compose_success_all",
+    "send_success_all",
+    "prepare_targeted_followup",
 ]

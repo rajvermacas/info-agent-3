@@ -313,6 +313,19 @@ class AgentState(TypedDict, total=False):
     _redirect_email: Optional[str]
     _redirect_reason: Optional[str]
 
+    # Multi-POC processing flags
+    _all_pocs_individual_complete: Optional[bool]  # All POCs reached individual terminal state
+
+    # Cross-POC validation results
+    _cross_poc_validation_complete: Optional[bool]
+    _cross_poc_is_valid: Optional[bool]
+    _cross_poc_issues: Optional[list[dict[str, Any]]]  # List of cross-POC issues
+    _cross_poc_missing_data: Optional[dict[str, list[str]]]  # {poc_email: [missing_items]}
+    _cross_poc_followup_round: Optional[int]  # Track follow-up iteration count
+
+    # Success acknowledgment emails (composed by compose_success_all)
+    _success_emails: Optional[list[dict[str, Any]]]  # [{poc_email, subject, body}]
+
 
 # ============================================================================
 # State Helper Functions

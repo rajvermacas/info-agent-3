@@ -9,6 +9,9 @@ Info Agent is a four-server system that automates email-based data collection wo
 ### Key Features
 
 - **Autonomous Email Workflows** - Send requests, wait for replies, validate responses, retry on failure
+- **Multi-POC Support** - Contact multiple Points of Contact simultaneously, process each independently
+- **Cross-POC Validation** - Validate data consistency across POCs (e.g., referential integrity between employee/department data)
+- **Targeted Follow-ups** - Re-request missing data only from specific POCs who need to provide it
 - **LangGraph State Machine** - Persistent state with checkpointing and interrupt-based suspension
 - **Real-Time Progress Tracking** - Server-Sent Events (SSE) stream task execution to web UI
 - **A2A Protocol Support** - Google Agent-to-Agent protocol (JSON-RPC 2.0)

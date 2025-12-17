@@ -62,6 +62,7 @@ pytest --cov=src --cov-report=html
 | **Graph Definition** | `src/mail_agent/agent/graph.py` |
 | **State Management** | `src/mail_agent/agent/state.py` |
 | **Parse Instruction** | `src/mail_agent/agent/nodes/parse_instruction.py` |
+| **Multi-POC Iteration** | `src/mail_agent/agent/nodes/select_next_poc.py`, `check_more_pocs.py` |
 | **Compose Email** | `src/mail_agent/agent/nodes/compose_email.py` |
 | **Send Email** | `src/mail_agent/agent/nodes/send_email.py` |
 | **Wait for Reply** | `src/mail_agent/agent/nodes/wait_for_reply.py` (interrupt) |
@@ -70,7 +71,10 @@ pytest --cov=src --cov-report=html
 | **Validate Response** | `src/mail_agent/agent/nodes/validate_response.py` (LLM) |
 | **Decide Next** | `src/mail_agent/agent/nodes/decide_next.py` |
 | **Handle Redirect** | `src/mail_agent/agent/nodes/handle_redirect.py` |
-| **Success Acknowledgment** | `src/mail_agent/agent/nodes/compose_success_reply.py`, `send_success_reply.py` |
+| **Cross-POC Validation** | `src/mail_agent/agent/nodes/validate_cross_poc.py` (LLM) |
+| **Targeted Follow-up** | `src/mail_agent/agent/nodes/prepare_targeted_followup.py` |
+| **Success Acknowledgment** | `src/mail_agent/agent/nodes/compose_success_all.py`, `send_success_all.py` |
+| **Legacy Success Reply** | `src/mail_agent/agent/nodes/compose_success_reply.py`, `send_success_reply.py` |
 
 ### A2A Protocol & Task Management
 | Feature | Files |
@@ -135,21 +139,44 @@ pytest --cov=src --cov-report=html
 
 **File:** `src/mail_agent/agent/graph.py`
 
-**Flow:**
+**Flow (Multi-POC Support):**
 ```
-START → parse_instruction → compose_email → send_email → wait_for_reply
+START → parse_instruction → select_next_poc
+      → compose_email → send_email → wait_for_reply
       → fetch_email → extract_content → validate_response
       → [handle_success | handle_failure | prepare_followup | handle_redirect]
-      → END (or loop back)
+      → check_more_pocs
+      → [select_next_poc (if more pending) | validate_cross_poc (if all complete)]
+      → [compose_success_all | prepare_targeted_followup]
+      → END (or loop back for cross-POC follow-up)
 
-Success Flow:
-  validate_response → handle_success → compose_success_reply → send_success_reply → END
+Multi-POC Processing:
+  1. parse_instruction: Parse ALL POCs from user instruction
+  2. select_next_poc: Pick next pending POC (loop entry point)
+  3. Process single POC through email flow
+  4. handle_success/failure: Mark POC conversation as complete
+  5. check_more_pocs: Check if more POCs need processing
+  6. Loop back to select_next_poc OR proceed to cross-POC validation
+
+Cross-POC Validation:
+  After all individual POCs complete, validate_cross_poc checks:
+  - Referential integrity between data from different POCs
+  - Example: employee.dept_id must exist in department data from another POC
+
+Targeted Follow-ups:
+  If cross-POC validation fails, prepare_targeted_followup:
+  - Identifies which specific POC(s) need to provide missing data
+  - Resets those POCs for re-processing
+  - Does NOT bother POCs whose data is already complete
+
+Success Flow (All POCs):
+  validate_cross_poc → compose_success_all → send_success_all → END
+
+Retry Flow (Individual POC):
+  validate_response → prepare_followup → compose_email (same POC, attempt++)
 
 Redirect Flow:
-  validate_response → handle_redirect → compose_email (for new POC)
-
-Retry Flow:
-  validate_response → prepare_followup → compose_email (same POC, attempt++)
+  validate_response → handle_redirect → check_more_pocs
 ```
 
 **Key Functions:**

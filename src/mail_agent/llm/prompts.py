@@ -336,6 +336,211 @@ Note: This is attempt {attempt_count} of {max_attempts}.
 
 Write the email subject (should be "Re: {original_subject}") and body."""
 
+    # ========================================================================
+    # Multi-POC Support Prompts
+    # ========================================================================
+
+    CROSS_POC_VALIDATION_SYSTEM = """You are a data validation assistant analyzing data from multiple sources.
+Your task is to check REFERENTIAL INTEGRITY and DATA CONSISTENCY across data provided by different people (POCs).
+
+Common scenarios to detect:
+1. MISSING REFERENCES: Data from POC A references IDs that don't exist in data from POC B
+   - Example: Employee data has dept_id=5, but Department data has no department with ID 5
+   - Example: Order data has customer_id=123, but Customer data has no customer ID 123
+
+2. INCOMPLETE DATA: One POC's data is missing entries needed by another POC's data
+   - Example: Employee references 3 departments but only 2 departments provided
+   - Example: Product catalog references suppliers not in supplier list
+
+3. INCONSISTENT DATA: Same entities have conflicting information across sources
+   - Example: Employee "John" in POC A's data has dept="Sales", but POC B's employee data says dept="Marketing"
+
+Be thorough and specific about what is missing and WHO needs to provide the missing data."""
+
+    @staticmethod
+    def validate_cross_poc(
+        request_description: str,
+        success_criteria: str,
+        poc_data: dict[str, dict],
+    ) -> str:
+        """
+        Create prompt for cross-POC validation.
+
+        Analyzes relationships between data from multiple sources.
+
+        Args:
+            request_description: Original request description.
+            success_criteria: Original success criteria.
+            poc_data: Dictionary mapping POC email to their data:
+                {
+                    "poc1@example.com": {
+                        "content": "JSON/CSV content string",
+                        "filename": "employees.csv",
+                        "has_attachment": True
+                    },
+                    ...
+                }
+
+        Returns:
+            Formatted prompt string.
+        """
+        # Build POC data sections
+        poc_sections = []
+        for poc_email, data in poc_data.items():
+            content = data.get("content", "")
+            filename = data.get("filename", "response")
+            # Truncate very large content
+            max_chars = 5000
+            truncated = content[:max_chars]
+            if len(content) > max_chars:
+                truncated += f"\n... (truncated, {len(content)} total chars)"
+
+            poc_sections.append(f"""
+POC: {poc_email}
+File: {filename}
+Content:
+```
+{truncated}
+```
+""")
+
+        poc_content = "\n---\n".join(poc_sections)
+
+        return f"""Original request: "{request_description}"
+Success criteria: "{success_criteria}"
+
+I have received data from {len(poc_data)} POC(s). Please analyze the data for CROSS-REFERENCE CONSISTENCY.
+
+{poc_content}
+
+ANALYZE THE FOLLOWING:
+
+1. REFERENTIAL INTEGRITY:
+   - Are there any IDs/references in one POC's data that don't exist in another POC's data?
+   - Example: If employee data references dept_id=5, does the department data contain ID 5?
+   - List specific missing references with the SOURCE POC and TARGET POC
+
+2. DATA COMPLETENESS:
+   - Is each POC's data complete on its own?
+   - Does the combined data form a complete picture?
+   - What specific items are missing and WHO should provide them?
+
+3. DATA CONSISTENCY:
+   - Are there any conflicts or inconsistencies between POCs' data?
+   - Same entities with different values?
+
+For each issue found, specify:
+- source_poc: Which POC has the data that references missing items
+- target_poc: Which POC should have the missing data
+- issue_type: "missing_reference", "invalid_reference", "incomplete_data", or "inconsistent_data"
+- details: Human-readable description
+- missing_items: Specific IDs/items that are missing
+
+If all data is consistent and complete, set is_valid=true with an empty issues list.
+If issues exist, set is_valid=false and list all issues found."""
+
+    @staticmethod
+    def compose_multi_poc_success_acknowledgment(
+        poc_email: str,
+        request_description: str,
+        provided_data_summary: str,
+        total_pocs: int,
+    ) -> str:
+        """
+        Create prompt for composing success acknowledgment for multi-POC scenario.
+
+        This is used after cross-POC validation passes.
+
+        Args:
+            poc_email: Recipient email address.
+            request_description: Original request description.
+            provided_data_summary: Summary of what this POC provided.
+            total_pocs: Total number of POCs in the request.
+
+        Returns:
+            Formatted prompt string.
+        """
+        multi_poc_context = ""
+        if total_pocs > 1:
+            multi_poc_context = f"""
+Note: This was a multi-party data collection. You are thanking one of {total_pocs} contributors.
+Keep the email focused on THIS recipient's contribution, not the overall project."""
+
+        return f"""Compose a success acknowledgment email:
+
+Recipient: {poc_email}
+Original request: {request_description}
+What this recipient provided: {provided_data_summary}
+{multi_poc_context}
+
+The email should:
+1. Thank them for providing {provided_data_summary}
+2. Confirm that the information was received successfully
+3. Be brief and professional
+4. Do NOT mention other POCs or their contributions
+5. End with "Best regards,\ninfo-agent"
+
+Write a short, professional thank-you email."""
+
+    @staticmethod
+    def compose_cross_poc_followup(
+        poc_email: str,
+        request_description: str,
+        cross_poc_issues: list[dict],
+        missing_items: list[str],
+        related_pocs: list[str],
+        original_subject: str,
+    ) -> str:
+        """
+        Create prompt for composing follow-up email about cross-POC data issues.
+
+        This is used when cross-POC validation finds that this specific POC
+        needs to provide additional or corrected data.
+
+        Args:
+            poc_email: Recipient email address.
+            request_description: Original request description.
+            cross_poc_issues: Issues involving this POC.
+            missing_items: Specific items this POC needs to provide.
+            related_pocs: Other POCs whose data revealed the issue.
+            original_subject: Original email subject for Re: prefix.
+
+        Returns:
+            Formatted prompt string.
+        """
+        issues_description = "\n".join(
+            f"- {issue.get('details', 'Data issue')}"
+            for issue in cross_poc_issues[:5]  # Limit to 5 issues
+        )
+
+        missing_items_str = "\n".join(f"- {item}" for item in missing_items[:10])
+
+        return f"""Compose a follow-up email requesting additional data:
+
+Recipient: {poc_email}
+Original request: {request_description}
+Original subject: "{original_subject}"
+
+ISSUE CONTEXT:
+After analyzing the data you provided alongside data from other contributors,
+we found some missing or incomplete information that you need to address.
+
+Issues identified:
+{issues_description}
+
+Specific items you need to provide or correct:
+{missing_items_str}
+
+The email should:
+1. Thank them for their initial response
+2. Explain that after cross-referencing with other data sources, some gaps were found
+3. Clearly list what additional data is needed
+4. Be professional and not accusatory
+5. Do NOT blame other POCs or mention their specific data
+6. End with "Best regards,\\ninfo-agent"
+
+Write the email subject (should be "Re: {original_subject}") and body."""
+
     @staticmethod
     def compose_email_for_text_response(
         poc_email: str,
