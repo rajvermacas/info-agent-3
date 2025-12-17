@@ -2,6 +2,7 @@
 LangGraph State Machine - Mail Agent graph definition.
 
 Defines the complete state machine for the mail agent workflow.
+Includes support for email redirects when POC suggests another contact.
 """
 
 import logging
@@ -23,6 +24,7 @@ from mail_agent.agent.nodes.decide_next import (
     handle_failure,
     prepare_followup,
 )
+from mail_agent.agent.nodes.handle_redirect import handle_redirect
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,7 @@ def route_after_parse(state: AgentState) -> Literal["compose_email", "end"]:
 
 def route_after_validation(
     state: AgentState,
-) -> Literal["handle_success", "handle_failure", "prepare_followup"]:
+) -> Literal["handle_success", "handle_failure", "prepare_followup", "handle_redirect"]:
     """Route based on validation result using decide_next logic."""
     result = decide_next(state)
 
@@ -59,6 +61,8 @@ def route_after_validation(
         return "handle_success"
     elif result == "failure":
         return "handle_failure"
+    elif result == "redirect":
+        return "handle_redirect"
     else:
         return "prepare_followup"
 
@@ -96,8 +100,12 @@ def create_mail_agent_graph() -> StateGraph:
     Graph Structure:
         START -> parse_instruction -> compose_email -> send_email -> wait_for_reply
               -> fetch_email -> extract_content -> validate_response
-              -> [handle_success | handle_failure | prepare_followup]
-              -> END (or loop back to compose_email for followup)
+              -> [handle_success | handle_failure | prepare_followup | handle_redirect]
+              -> END (or loop back to compose_email for followup/redirect)
+
+    Redirect Flow:
+        When a POC responds with "I'm not the right contact, email xyz@abc.com":
+        validate_response -> handle_redirect -> compose_email (for new POC)
     """
     logger.info("Creating mail agent graph")
 
@@ -125,6 +133,7 @@ def create_mail_agent_graph() -> StateGraph:
     graph.add_node("handle_success", handle_success)
     graph.add_node("handle_failure", handle_failure)
     graph.add_node("prepare_followup", prepare_followup)
+    graph.add_node("handle_redirect", handle_redirect)
 
     # ========================================================================
     # Add Edges
@@ -158,6 +167,7 @@ def create_mail_agent_graph() -> StateGraph:
             "handle_success": "handle_success",
             "handle_failure": "handle_failure",
             "prepare_followup": "prepare_followup",
+            "handle_redirect": "handle_redirect",
         },
     )
 
@@ -167,6 +177,9 @@ def create_mail_agent_graph() -> StateGraph:
 
     # Followup -> Back to compose
     graph.add_edge("prepare_followup", "compose_email")
+
+    # Redirect -> Back to compose (for new POC)
+    graph.add_edge("handle_redirect", "compose_email")
 
     logger.info("Mail agent graph created successfully")
     return graph

@@ -2,6 +2,7 @@
 Validate Response Node - Check if POC response satisfies the request.
 
 Uses LLM to analyze extracted content against success criteria.
+Also detects redirect responses where POC suggests another contact.
 """
 
 import logging
@@ -62,6 +63,9 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
         headers = state.get("_extracted_headers", [])
         row_count = state.get("_extracted_row_count", 0)
 
+        # Get email body text for redirect detection
+        email_body_text = state.get("_fetched_body_text", "")
+
         settings = get_settings()
         llm_client = LLMClient(settings)
 
@@ -69,7 +73,8 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
             f"Validating: content_length={len(extracted_content)}, "
             f"max_chars={settings.validation_content_max_chars}, "
             f"truncated={len(extracted_content) > settings.validation_content_max_chars}, "
-            f"headers={headers}, row_count={row_count}"
+            f"headers={headers}, row_count={row_count}, "
+            f"body_text_length={len(email_body_text)}"
         )
 
         # Generate validation prompt
@@ -80,6 +85,7 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
             row_count=row_count,
             headers=headers,
             max_content_chars=settings.validation_content_max_chars,
+            email_body_text=email_body_text,
         )
 
         # Call LLM for validation
@@ -89,8 +95,26 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
             system_prompt=PromptTemplates.VALIDATE_SYSTEM,
         )
 
+        # Check for redirect
+        is_redirect = (
+            validation.redirect.is_redirect
+            if hasattr(validation, "redirect") and validation.redirect
+            else False
+        )
+        redirect_email = (
+            validation.redirect.redirect_email
+            if is_redirect and validation.redirect.redirect_email
+            else None
+        )
+        redirect_reason = (
+            validation.redirect.redirect_reason
+            if is_redirect and validation.redirect.redirect_reason
+            else None
+        )
+
         logger.info(
             f"Validation result: is_valid={validation.is_valid}, "
+            f"is_redirect={is_redirect}, redirect_email={redirect_email}, "
             f"feedback={validation.feedback[:100]}..."
         )
 
@@ -103,7 +127,13 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
         )
         conversation.validation_results.append(result)
 
-        if validation.is_valid:
+        if is_redirect and redirect_email:
+            # Redirect detected - POC suggested another contact
+            progress_msg = (
+                f"REDIRECT from {current_poc}: {redirect_reason or 'Not the right contact'}. "
+                f"Redirecting to: {redirect_email}"
+            )
+        elif validation.is_valid:
             # Success!
             conversation.status = "success"
             conversation.final_result = "success"
@@ -123,6 +153,10 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
             "_validation_is_valid": validation.is_valid,
             "_validation_feedback": validation.feedback,
             "_validation_missing_items": validation.missing_items,
+            # Redirect information
+            "_redirect_detected": is_redirect,
+            "_redirect_email": redirect_email,
+            "_redirect_reason": redirect_reason,
             # Clear extraction data
             "_extracted_content": None,
             "_extracted_headers": None,

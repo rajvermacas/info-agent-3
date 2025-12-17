@@ -18,7 +18,7 @@ from mail_agent.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def decide_next(state: AgentState) -> Literal["success", "failure", "followup"]:
+def decide_next(state: AgentState) -> Literal["success", "failure", "followup", "redirect"]:
     """
     Determine the next action based on validation result.
 
@@ -28,7 +28,7 @@ def decide_next(state: AgentState) -> Literal["success", "failure", "followup"]:
         state: Current agent state with validation result.
 
     Returns:
-        Next route: "success", "failure", or "followup".
+        Next route: "success", "failure", "followup", or "redirect".
     """
     current_poc = state.get("current_poc")
     if not current_poc:
@@ -38,6 +38,16 @@ def decide_next(state: AgentState) -> Literal["success", "failure", "followup"]:
     try:
         conversation = get_conversation(state, current_poc)
         settings = get_settings()
+
+        # Check for redirect first (highest priority)
+        is_redirect = state.get("_redirect_detected", False)
+        redirect_email = state.get("_redirect_email")
+
+        if is_redirect and redirect_email:
+            logger.info(
+                f"Routing {current_poc} to REDIRECT -> {redirect_email}"
+            )
+            return "redirect"
 
         # Check validation result
         is_valid = state.get("_validation_is_valid", False)

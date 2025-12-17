@@ -16,6 +16,7 @@ from mail_agent.agent.nodes.fetch_email import fetch_email
 from mail_agent.agent.nodes.extract_content import extract_content
 from mail_agent.agent.nodes.validate_response import validate_response
 from mail_agent.agent.nodes.decide_next import decide_next
+from mail_agent.agent.nodes.handle_redirect import handle_redirect
 
 __all__ = [
     "parse_instruction",
@@ -30,4 +31,5 @@ __all__ = [
     "extract_content",
     "validate_response",
     "decide_next",
+    "handle_redirect",
 ]

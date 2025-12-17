@@ -42,6 +42,23 @@ class ComposedEmail(BaseModel):
     body: str = Field(description="Full email body text")
 
 
+class RedirectInfo(BaseModel):
+    """Schema for redirect information when POC suggests another contact."""
+
+    is_redirect: bool = Field(
+        default=False,
+        description="Whether the response indicates redirection to another person"
+    )
+    redirect_email: str | None = Field(
+        default=None,
+        description="Email address of the new contact to redirect to"
+    )
+    redirect_reason: str | None = Field(
+        default=None,
+        description="Reason given for the redirect (e.g., 'not the right department')"
+    )
+
+
 class ValidationResult(BaseModel):
     """Schema for response validation result."""
 
@@ -52,6 +69,10 @@ class ValidationResult(BaseModel):
     missing_items: list[str] = Field(
         default_factory=list,
         description="List of specific items that are missing or incorrect",
+    )
+    redirect: RedirectInfo = Field(
+        default_factory=RedirectInfo,
+        description="Redirect information if POC suggests another contact"
     )
 
 
@@ -91,11 +112,23 @@ Your emails should:
 
     VALIDATE_SYSTEM = """You are a validation assistant. Analyze whether a response satisfies the original request.
 Be strict: if the request asked for 10 items and only 8 are provided, mark as invalid.
+
+IMPORTANT: Also check if the response is a REDIRECT. A redirect occurs when:
+- The responder says they are NOT the correct point of contact
+- The responder suggests contacting someone else (e.g., "please contact xyz@abc.com instead")
+- The responder forwards the request or says "I've forwarded this to..." with an email address
+
+If a redirect is detected:
+- Set is_redirect=true
+- Extract the redirect_email (the new contact's email address)
+- Provide the redirect_reason (why they are redirecting)
+
 Check for:
-1. Correct number of items
-2. Correct format/structure
-3. Meaningful data (not placeholders)
-4. Completeness of information"""
+1. Is this a REDIRECT to another person? (highest priority check)
+2. Correct number of items
+3. Correct format/structure
+4. Meaningful data (not placeholders)
+5. Completeness of information"""
 
     FOLLOWUP_SYSTEM = """You are a professional email composer. Write polite follow-up emails requesting corrections.
 Your follow-up emails should:
@@ -170,6 +203,7 @@ Write the email subject and body."""
         row_count: int,
         headers: list[str],
         max_content_chars: int = 8000,
+        email_body_text: str | None = None,
     ) -> str:
         """
         Create prompt for validating POC response.
@@ -181,20 +215,35 @@ Write the email subject and body."""
             row_count: Number of rows in the attachment.
             headers: Column headers from the attachment.
             max_content_chars: Maximum characters of content to include in prompt.
+            email_body_text: The email body text (for redirect detection).
 
         Returns:
             Formatted prompt string.
         """
+        email_body_section = ""
+        if email_body_text:
+            email_body_section = f"""
+Email body text:
+\"\"\"
+{email_body_text[:2000]}{"..." if len(email_body_text) > 2000 else ""}
+\"\"\"
+"""
+
         return f"""Original request: "{request_description}"
 Success criteria: "{success_criteria}"
-
+{email_body_section}
 Received response content:
 - Row count: {row_count}
 - Headers/Columns: {', '.join(headers)}
 - Data preview:
 {extracted_content[:max_content_chars]}{"..." if len(extracted_content) > max_content_chars else ""}
 
-Analyze the following:
+FIRST, check if this is a REDIRECT:
+- Does the email body say they are not the correct contact?
+- Does it suggest contacting someone else with an email address?
+- If YES: Set redirect.is_redirect=true, extract redirect.redirect_email, and provide redirect.redirect_reason
+
+If NOT a redirect, analyze the following:
 1. Does the response contain the requested information?
 2. Is the data complete (correct number of items as requested)?
 3. Is the format correct?

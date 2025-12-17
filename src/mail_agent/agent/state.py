@@ -52,6 +52,16 @@ class ValidationResult:
 
 
 @dataclass
+class RedirectInfo:
+    """Information about a redirect from one POC to another."""
+
+    original_poc: str
+    redirect_email: str
+    redirect_reason: Optional[str] = None
+    redirected_at: Optional[datetime] = None
+
+
+@dataclass
 class ConversationState:
     """
     State of conversation with a single POC.
@@ -70,17 +80,21 @@ class ConversationState:
         "validating",
         "success",
         "failed",
+        "redirected",
     ] = "pending"
     attempt_count: int = 0
     sent_emails: list[SentEmail] = field(default_factory=list)
     received_emails: list[ReceivedEmail] = field(default_factory=list)
     validation_results: list[ValidationResult] = field(default_factory=list)
-    final_result: Optional[Literal["success", "failed_max_attempts"]] = None
+    final_result: Optional[Literal["success", "failed_max_attempts", "redirected"]] = None
     error_message: Optional[str] = None
+    # Redirect tracking
+    redirected_from: Optional[RedirectInfo] = None  # If this conversation was created from a redirect
+    redirected_to: Optional[str] = None  # Email of POC we redirected to (if any)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return {
+        result = {
             "poc_email": self.poc_email,
             "status": self.status,
             "attempt_count": self.attempt_count,
@@ -117,11 +131,40 @@ class ConversationState:
             ],
             "final_result": self.final_result,
             "error_message": self.error_message,
+            "redirected_to": self.redirected_to,
         }
+        # Add redirect info if present
+        if self.redirected_from:
+            result["redirected_from"] = {
+                "original_poc": self.redirected_from.original_poc,
+                "redirect_email": self.redirected_from.redirect_email,
+                "redirect_reason": self.redirected_from.redirect_reason,
+                "redirected_at": (
+                    self.redirected_from.redirected_at.isoformat()
+                    if self.redirected_from.redirected_at
+                    else None
+                ),
+            }
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ConversationState":
         """Create from dictionary."""
+        # Parse redirect info if present
+        redirected_from = None
+        if data.get("redirected_from"):
+            rf = data["redirected_from"]
+            redirected_from = RedirectInfo(
+                original_poc=rf["original_poc"],
+                redirect_email=rf["redirect_email"],
+                redirect_reason=rf.get("redirect_reason"),
+                redirected_at=(
+                    datetime.fromisoformat(rf["redirected_at"])
+                    if rf.get("redirected_at")
+                    else None
+                ),
+            )
+
         return cls(
             poc_email=data["poc_email"],
             status=data["status"],
@@ -159,6 +202,8 @@ class ConversationState:
             ],
             final_result=data.get("final_result"),
             error_message=data.get("error_message"),
+            redirected_from=redirected_from,
+            redirected_to=data.get("redirected_to"),
         )
 
 
@@ -263,6 +308,11 @@ class AgentState(TypedDict, total=False):
     _validation_feedback: Optional[str]
     _validation_missing_items: Optional[list[str]]
 
+    # Temporary: redirect detection from validate_response
+    _redirect_detected: Optional[bool]
+    _redirect_email: Optional[str]
+    _redirect_reason: Optional[str]
+
 
 # ============================================================================
 # State Helper Functions
@@ -363,7 +413,7 @@ def all_conversations_complete(state: AgentState) -> bool:
         state: Current agent state.
 
     Returns:
-        True if all conversations are in success or failed state.
+        True if all conversations are in success, failed, or redirected state.
     """
     conversations = state.get("conversations", {})
     if not conversations:
@@ -371,7 +421,8 @@ def all_conversations_complete(state: AgentState) -> bool:
 
     for conv_dict in conversations.values():
         status = conv_dict.get("status")
-        if status not in ("success", "failed"):
+        # redirected is terminal for the original POC, but a new conversation is created
+        if status not in ("success", "failed", "redirected"):
             return False
 
     return True
@@ -391,7 +442,7 @@ def get_active_poc(state: AgentState) -> Optional[str]:
 
     for poc_email, conv_dict in conversations.items():
         status = conv_dict.get("status")
-        if status not in ("success", "failed"):
+        if status not in ("success", "failed", "redirected"):
             return poc_email
 
     return None
