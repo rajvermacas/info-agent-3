@@ -1,0 +1,10 @@
+Currently in the mail agent if I provide below instruction:
+Send mail to raj@gmail.com and akshay@gmail.com asking 10 animal names
+
+Then it only sends mail to raj@gmail.com and doesn't send mail to akshay@gmail.com which means that right now sending mail to multiple points of contact is not possible.
+Use @agent-explore with haiku to find out the issue. Find the root cause. Propose a fix.
+
+Note that both the point of contacts can send attachments so the mail agent should be able to validate both of them for completeness and correctness. It might happen that both the attachments contain complementary information for example one attachment contains employee details where as other department contains its deparment details but it may happen that some of the employees have a department id which is not present in the department attachment which makes the whole information incomplete. 
+So the mail agent shoulld be able to flag out such information scnearios as well and raise it to the point of contacts respectively asking again for the relevant missing pieces. This is just one of many examples that can be present. The mail agent validation should be prompted in such a way that LLM can precisely find out about the infrmaton incorrectness or incompleteness. 
+
+Note that the point of contacts can be one or many. And by many it can be even more than 2.
