@@ -10,6 +10,7 @@ from typing import Any
 from mail_agent.agent.state import (
     AgentState,
     ConversationState,
+    RedirectInfo,
     get_conversation,
     get_parsed_request,
     update_conversation,
@@ -84,32 +85,62 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
                 original_subject=original_subject,
             )
 
+            # Format system prompt with agent email identity
+            followup_system_prompt = PromptTemplates.FOLLOWUP_SYSTEM.format(
+                agent_email=settings.agent_email
+            )
+
             composed = await llm_client.generate_structured(
                 prompt=prompt,
                 output_schema=FollowUpEmail,
-                system_prompt=PromptTemplates.FOLLOWUP_SYSTEM,
+                system_prompt=followup_system_prompt,
             )
 
             logger.info(f"Composed follow-up email: subject={composed.subject}")
 
         else:
-            # Compose initial email
-            logger.info("Composing initial request email")
+            # Check if this is a redirect (new conversation created from a redirect)
+            is_redirect_email = conversation.redirected_from is not None
 
-            prompt = PromptTemplates.compose_email(
-                poc_email=current_poc,
-                request_description=parsed_request.request_description,
-                expected_format=parsed_request.expected_format,
-                success_criteria=parsed_request.success_criteria,
+            if is_redirect_email:
+                # Compose redirect email - mentioning the referrer
+                logger.info(
+                    f"Composing redirect email for {current_poc} "
+                    f"(redirected from {conversation.redirected_from.original_poc})"
+                )
+
+                prompt = PromptTemplates.compose_email_for_redirect(
+                    poc_email=current_poc,
+                    request_description=parsed_request.request_description,
+                    expected_format=parsed_request.expected_format,
+                    success_criteria=parsed_request.success_criteria,
+                    referrer_email=conversation.redirected_from.original_poc,
+                    redirect_reason=conversation.redirected_from.redirect_reason,
+                )
+            else:
+                # Compose initial email (no redirect)
+                logger.info("Composing initial request email")
+
+                prompt = PromptTemplates.compose_email(
+                    poc_email=current_poc,
+                    request_description=parsed_request.request_description,
+                    expected_format=parsed_request.expected_format,
+                    success_criteria=parsed_request.success_criteria,
+                )
+
+            # Format system prompt with agent email identity
+            compose_system_prompt = PromptTemplates.COMPOSE_SYSTEM.format(
+                agent_email=settings.agent_email
             )
 
             composed = await llm_client.generate_structured(
                 prompt=prompt,
                 output_schema=ComposedEmail,
-                system_prompt=PromptTemplates.COMPOSE_SYSTEM,
+                system_prompt=compose_system_prompt,
             )
 
-            logger.info(f"Composed initial email: subject={composed.subject}")
+            email_type = "redirect" if is_redirect_email else "initial"
+            logger.info(f"Composed {email_type} email: subject={composed.subject}")
 
         # Store composed email temporarily in state for send_email node
         # The actual SentEmail record will be created after successful send

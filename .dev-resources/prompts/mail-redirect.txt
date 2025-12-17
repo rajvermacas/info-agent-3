@@ -1,0 +1,102 @@
+/rearticulate\
+  I sent request to mail agent like below:\
+  Send mail to raj@gmail.com asking 10 food recipes in CSV file\
+  \
+  Then info-agent@gmail.com sent mail to raj@gmail.com:\
+  Email Detail
+
+  From
+  info-agent@gmail.com
+  To
+  raj@gmail.com
+  Subject
+  Request for 10 Food Recipes in CSV Format
+  Received
+  2025-12-17 14:38:38
+  Email ID
+  f84601f3-a1fb-4ce5-98fd-49abf1224ba0
+  Body
+
+
+                  Dear Raj,
+
+  I hope you are well. Could you please send me an email containing 10 food recipes in a CSV file? The file should have exactly 10
+  rows, each representing a distinct recipe.
+
+  Thank you for your assistance. I look forward to receiving the CSV at your earliest convenience.
+
+  Best regards,
+  [Your Name]
+  [Your Position]
+  [Your Company]
+  [Contact Information] 
+
+  then raj@gmail.com sent mail to info-agent@gmail.com:
+  Email Detail
+
+From
+raj@gmail.com
+To
+info-agent@gmail.com
+Subject
+Re: Request for 10 Food Recipes in CSV Format
+Received
+2025-12-17 14:39:07
+Email ID
+96c23e79-4f18-4658-9d56-cfdad20d57c4
+Body
+
+                
+                I am not the right point of contact. Please connect sumit@ubs.com
+
+Then info-agent@gmail.com sent mail to sumit@ubs.com:
+Email Detail
+
+From
+info-agent@gmail.com
+To
+sumit@ubs.com
+Subject
+Request for CSV File Containing 10 Food Recipes
+Received
+2025-12-17 14:39:11
+Email ID
+0ec1e58f-0f80-4520-8cda-8f2c2362b6e3
+Body
+
+                
+                Dear Sumit,
+
+I hope you are well.
+
+Could you please forward the following request to Raj at raj@gmail.com on my behalf?
+
+We need a CSV file that contains exactly 10 rows of food recipes. The file should be sent to us once it is prepared.
+
+Thank you for your assistance.
+
+Best regards,
+[Your Name]
+[Your Position]
+[Your Contact Information]
+----------------
+
+Here there are 2 issues:
+First Issue:
+info-agent@gmail.com should not have any placeholders.
+It should clearly say
+Best regards,
+info-agent
+
+instead of having placeholders like:
+[Your Name]
+[Your Position]
+[Your Contact Information]
+
+Second Issue:
+The redirect mail from info-agent@gmail.com to sumit@ubs.com mentioned `Could you please forward the following request to Raj at raj@gmail.com on my behalf?`
+This is not correct the actual intent should be raj@gmail.com has redirected me to you for the given requirement.
+---------------------------
+
+I think the system prompts of the LLM inside mail agent langgraph agent is not correctly provided.
+While providing system prompt to the LLM clearly mention the persona of the agent which is Information Gathering Agent which should reflect in the mail composition, redirection, validation.

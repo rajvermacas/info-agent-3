@@ -102,13 +102,21 @@ You must extract email addresses, understand what is being requested, and define
 Be specific about success criteria (e.g., "10 rows of data" not just "data").
 Always respond with the requested JSON structure."""
 
-    COMPOSE_SYSTEM = """You are a professional email composer. Write clear, polite, and concise emails.
-Your emails should:
+    COMPOSE_SYSTEM = """You are an Information Gathering Agent sending emails on behalf of your organization.
+Your email address is: {agent_email}
+
+When composing emails:
 1. Be professional and polite
-2. Clearly state what is needed
+2. Clearly state what information/data is needed
 3. Specify the expected format (Excel/CSV) if applicable
 4. Be concise but complete
-5. Include a friendly greeting and closing"""
+5. Include a friendly greeting and professional closing
+
+IMPORTANT EMAIL SIGNATURE RULES:
+- End emails with exactly: "Best regards,\\ninfo-agent"
+- NEVER use placeholder text like [Your Name], [Your Position], [Your Contact Information], [Your Company]
+- The agent's identity is simply "info-agent" - no title, position, or contact details needed
+- Do NOT include any bracketed placeholders in your email"""
 
     VALIDATE_SYSTEM = """You are a validation assistant. Analyze whether a response satisfies the original request.
 Be strict: if the request asked for 10 items and only 8 are provided, mark as invalid.
@@ -130,13 +138,21 @@ Check for:
 4. Meaningful data (not placeholders)
 5. Completeness of information"""
 
-    FOLLOWUP_SYSTEM = """You are a professional email composer. Write polite follow-up emails requesting corrections.
-Your follow-up emails should:
+    FOLLOWUP_SYSTEM = """You are an Information Gathering Agent sending follow-up emails.
+Your email address is: {agent_email}
+
+When composing follow-up emails:
 1. Thank them for their response
 2. Politely explain what was missing or incorrect
 3. Clearly state what corrections are needed
 4. Remain professional and not demanding
-5. Be encouraging and helpful"""
+5. Be encouraging and helpful
+
+IMPORTANT EMAIL SIGNATURE RULES:
+- End emails with exactly: "Best regards,\\ninfo-agent"
+- NEVER use placeholder text like [Your Name], [Your Position], [Your Contact Information], [Your Company]
+- The agent's identity is simply "info-agent" - no title, position, or contact details needed
+- Do NOT include any bracketed placeholders in your email"""
 
     @staticmethod
     def parse_instruction(user_instruction: str) -> str:
@@ -322,5 +338,57 @@ The email should:
 2. Clearly state what information is needed
 3. Request a text response in the email body
 4. Be concise but complete
+
+Write the email subject and body."""
+
+    @staticmethod
+    def compose_email_for_redirect(
+        poc_email: str,
+        request_description: str,
+        expected_format: str,
+        success_criteria: str,
+        referrer_email: str,
+        redirect_reason: Optional[str] = None,
+    ) -> str:
+        """
+        Create prompt for composing email to a redirected contact.
+
+        This is used when the original POC (referrer_email) has redirected us
+        to a new contact (poc_email). The email should mention the referral.
+
+        Args:
+            poc_email: Recipient email address (the redirect target).
+            request_description: What is being requested.
+            expected_format: Expected response format (excel, csv, text).
+            success_criteria: Specific criteria for success.
+            referrer_email: Email of the person who redirected us.
+            redirect_reason: Optional reason given for the redirect.
+
+        Returns:
+            Formatted prompt string.
+        """
+        reason_context = ""
+        if redirect_reason:
+            reason_context = f" They mentioned: \"{redirect_reason}\"."
+
+        return f"""Compose an email to request the following:
+
+Recipient: {poc_email}
+Request: {request_description}
+Expected format: {expected_format}
+Success criteria: {success_criteria}
+
+IMPORTANT CONTEXT - This is a REDIRECT:
+- {referrer_email} has redirected me to you for this request.{reason_context}
+- You MUST mention in the opening that {referrer_email} referred you to contact {poc_email}.
+- Example opening: "I was referred to you by {referrer_email} regarding the following request..."
+- Do NOT ask {poc_email} to forward anything back to {referrer_email}.
+
+The email should:
+1. Start by mentioning the referral from {referrer_email}
+2. Clearly state what information/data is needed
+3. Specify the expected format ({expected_format})
+4. Mention the specific criteria ({success_criteria})
+5. Be concise but complete
 
 Write the email subject and body."""
