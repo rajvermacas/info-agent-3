@@ -1,0 +1,22 @@
+For the below instruction in send request page:
+Send mail to raj@gmail.com and neha@gmail.com asking 10 food recipes in CSV file.
+
+Currently the flow is 
+1. mail is sent to raj
+2. raj replies
+3. response validated
+4. rsponse is correct then send mail to neha and wait for her reply
+
+Ideally both the mails should be sent at once in parallel. But currently it is sequential.
+----------------------
+
+Scenario:
+Instruction - Send mail to raj@gmail.com and neha@gmail.com asking 10 food recipes in CSV file
+
+Issues:
+1. I cannot see any tasks in task dashboard after the mail is sent to raj and neha
+2. Once raj and neha both replies on the mail then the task appears on task dashboard with completed status
+
+Expectation:
+1. As soon as the mail is sent from info-agent to raj and neha, the task should appear on the task dashboard
+

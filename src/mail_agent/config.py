@@ -180,6 +180,16 @@ class Settings(BaseSettings):
         description="Interval (seconds) for cleaning up expired suspended tasks",
     )
 
+    # Parallel Processing Mode
+    parallel_processing_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable parallel POC processing. When True, emails are sent to all POCs "
+            "simultaneously and replies are processed in parallel. When False, POCs "
+            "are processed sequentially (legacy behavior)."
+        ),
+    )
+
     # HTTP Client Settings
     http_timeout_seconds: float = Field(
         default=30.0,

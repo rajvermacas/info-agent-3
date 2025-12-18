@@ -249,7 +249,40 @@ class MailAgentA2AExecutor(AgentExecutor):
                     f"Task {task_id}: Interrupt detected - suspending task"
                 )
 
-                # Suspend the task
+                # Check for parallel mode (multi-POC)
+                is_parallel = interrupt_data.get("parallel_mode", False)
+                poc_emails = interrupt_data.get("poc_emails", [])
+
+                if is_parallel and poc_emails:
+                    # PARALLEL MODE: Multi-POC suspend
+                    await self.task_manager.suspend_task_multi_poc(
+                        task_id=task_id,
+                        poc_emails=poc_emails,
+                        thread_id=task_id,
+                        interrupt_data=interrupt_data,
+                    )
+
+                    # Emit suspended event for parallel mode
+                    await self._emit_sse_event(
+                        event_queue,
+                        SSEEvent(
+                            task_id=task_id,
+                            state=TaskState.SUSPENDED,
+                            message=(
+                                f"Waiting for replies from {len(poc_emails)} POCs. "
+                                f"Poll GET /tasks/{task_id} for result."
+                            ),
+                            poc_email=", ".join(poc_emails),
+                        ),
+                    )
+
+                    logger.info(
+                        f"Task {task_id}: Suspended (parallel) waiting for "
+                        f"{len(poc_emails)} POCs: {poc_emails}"
+                    )
+                    return None  # Suspended, not completed
+
+                # SINGLE POC MODE: Legacy single-POC suspend
                 poc_email = interrupt_data.get("poc_email")
                 if poc_email:
                     await self.task_manager.suspend_task(
@@ -277,18 +310,18 @@ class MailAgentA2AExecutor(AgentExecutor):
 
                 else:
                     logger.error(
-                        f"Task {task_id}: Interrupt without POC email"
+                        f"Task {task_id}: Interrupt without POC email(s)"
                     )
                     await self._emit_sse_event(
                         event_queue,
                         SSEEvent(
                             task_id=task_id,
                             state=TaskState.FAILED,
-                            message="Interrupt without POC email",
-                            error="Interrupt data missing poc_email",
+                            message="Interrupt without POC email(s)",
+                            error="Interrupt data missing poc_email or poc_emails",
                         ),
                     )
-                    return {"error": "Interrupt without POC email"}
+                    return {"error": "Interrupt without POC email(s)"}
 
             # Process regular node outputs
             for node_name, node_output in event.items():

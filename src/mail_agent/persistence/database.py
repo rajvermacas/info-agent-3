@@ -81,6 +81,40 @@ class DatabaseManager:
         ON task_results(status)
     """
 
+    # Multi-POC suspended tasks table for parallel processing
+    CREATE_SUSPENDED_TASKS_MULTI_TABLE = """
+        CREATE TABLE IF NOT EXISTS suspended_tasks_multi (
+            task_id TEXT PRIMARY KEY,
+            poc_emails TEXT NOT NULL,
+            pending_pocs TEXT NOT NULL,
+            received_webhooks TEXT,
+            thread_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            interrupt_data TEXT
+        )
+    """
+
+    CREATE_SUSPENDED_TASKS_MULTI_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_suspended_tasks_multi_expires
+        ON suspended_tasks_multi(expires_at)
+    """
+
+    # Mapping table for POC email to task_id lookup (multi-POC)
+    CREATE_POC_TASK_MAPPING_TABLE = """
+        CREATE TABLE IF NOT EXISTS poc_task_mapping (
+            poc_email TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (task_id) REFERENCES suspended_tasks_multi(task_id)
+        )
+    """
+
+    CREATE_POC_TASK_MAPPING_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_poc_task_mapping_task_id
+        ON poc_task_mapping(task_id)
+    """
+
     def __init__(self, settings: Optional[Settings] = None) -> None:
         """
         Initialize database manager.
@@ -155,7 +189,7 @@ class DatabaseManager:
 
         logger.debug("Creating custom tables if not exist")
 
-        # Create suspended_tasks table
+        # Create suspended_tasks table (single-POC, legacy)
         await self._connection.execute(self.CREATE_SUSPENDED_TASKS_TABLE)
         await self._connection.execute(self.CREATE_SUSPENDED_TASKS_INDEX)
         await self._connection.execute(self.CREATE_SUSPENDED_TASKS_EXPIRES_INDEX)
@@ -165,6 +199,16 @@ class DatabaseManager:
         await self._connection.execute(self.CREATE_TASK_RESULTS_TABLE)
         await self._connection.execute(self.CREATE_TASK_RESULTS_STATUS_INDEX)
         logger.debug("task_results table ready")
+
+        # Create multi-POC suspended tasks table (parallel processing)
+        await self._connection.execute(self.CREATE_SUSPENDED_TASKS_MULTI_TABLE)
+        await self._connection.execute(self.CREATE_SUSPENDED_TASKS_MULTI_INDEX)
+        logger.debug("suspended_tasks_multi table ready")
+
+        # Create POC-to-task mapping table (for multi-POC lookup)
+        await self._connection.execute(self.CREATE_POC_TASK_MAPPING_TABLE)
+        await self._connection.execute(self.CREATE_POC_TASK_MAPPING_INDEX)
+        logger.debug("poc_task_mapping table ready")
 
         await self._connection.commit()
         logger.info("All custom tables created/verified")

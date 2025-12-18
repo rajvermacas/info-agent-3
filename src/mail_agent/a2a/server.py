@@ -27,7 +27,10 @@ from mail_agent.a2a.agent_card import create_agent_card
 from mail_agent.a2a.executor import MailAgentA2AExecutor
 from mail_agent.a2a.progress_store import ProgressStore
 from mail_agent.a2a.routes import create_tasks_router, create_progress_router
-from mail_agent.agent.graph import compile_mail_agent_graph
+from mail_agent.agent.graph import (
+    compile_mail_agent_graph,
+    compile_mail_agent_graph_parallel,
+)
 from mail_agent.agent.nodes.wait_for_reply import set_a2a_mode, set_webhook_server
 from mail_agent.config import Settings, get_settings, configure_logging
 from mail_agent.persistence import DatabaseManager, TaskStore, create_checkpointer
@@ -100,10 +103,15 @@ async def create_a2a_application(
     task_store = TaskStore(db_manager)
     logger.info("TaskStore created")
 
-    # 2. Compile graph with checkpointer
-    logger.info("Compiling mail agent graph with checkpointer")
-    graph = compile_mail_agent_graph(checkpointer=checkpointer)
-    logger.info("Graph compiled with checkpointer")
+    # 2. Compile graph with checkpointer (parallel or sequential based on config)
+    if settings.parallel_processing_enabled:
+        logger.info("Compiling PARALLEL mail agent graph with checkpointer")
+        graph = compile_mail_agent_graph_parallel(checkpointer=checkpointer)
+        logger.info("Parallel graph compiled - emails will be sent to all POCs simultaneously")
+    else:
+        logger.info("Compiling SEQUENTIAL mail agent graph with checkpointer")
+        graph = compile_mail_agent_graph(checkpointer=checkpointer)
+        logger.info("Sequential graph compiled - emails will be sent to POCs one at a time")
 
     # 3. Create WebhookServer (without TaskRouter - we'll use TaskManager)
     webhook_server = WebhookServer(settings=settings)

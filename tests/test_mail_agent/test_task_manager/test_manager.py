@@ -712,3 +712,398 @@ class TestSaveResult:
         assert result["error"] is None
 
         await task_manager.stop()
+
+
+class TestSuspendTaskMultiPoc:
+    """Tests for multi-POC suspend operation."""
+
+    @pytest.mark.asyncio
+    async def test_suspend_task_multi_poc_registers_all_pocs(self, task_manager):
+        """Test that suspend_task_multi_poc registers all POC mappings."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com", "poc3@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-task-123",
+            poc_emails=poc_emails,
+            thread_id="thread-123",
+        )
+
+        # All POCs should be mapped to the same task
+        for poc_email in poc_emails:
+            assert task_manager.get_task_for_poc(poc_email) == "multi-task-123"
+
+        # All should be in registered POCs
+        registered = task_manager.get_registered_pocs()
+        for poc_email in poc_emails:
+            assert poc_email in registered
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_suspend_task_multi_poc_persists_to_database(self, task_manager, task_store):
+        """Test that suspend_task_multi_poc persists to database."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-task-456",
+            poc_emails=poc_emails,
+            thread_id="thread-456",
+        )
+
+        # Should be in multi-POC database table
+        task = await task_store.get_suspended_task_multi_poc("multi-task-456")
+        assert task is not None
+        assert set(task["poc_emails"]) == set(poc_emails)
+        assert set(task["pending_pocs"]) == set(poc_emails)
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_suspend_task_multi_poc_with_interrupt_data(self, task_manager, task_store):
+        """Test that interrupt_data is persisted correctly."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com"]
+        interrupt_data = {
+            "reason": "waiting_for_replies",
+            "parallel_mode": True,
+            "poc_emails": poc_emails,
+        }
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-task-789",
+            poc_emails=poc_emails,
+            thread_id="thread-789",
+            interrupt_data=interrupt_data,
+        )
+
+        task = await task_store.get_suspended_task_multi_poc("multi-task-789")
+        assert task["interrupt_data"]["parallel_mode"] is True
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_suspend_task_multi_poc_duplicate_poc_raises(self, task_manager):
+        """Test that suspending with duplicate POC raises error."""
+        await task_manager.start()
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-task-a",
+            poc_emails=["shared@example.com"],
+            thread_id="thread-a",
+        )
+
+        with pytest.raises(TaskManagerError, match="already has pending task"):
+            await task_manager.suspend_task_multi_poc(
+                task_id="multi-task-b",
+                poc_emails=["shared@example.com", "other@example.com"],
+                thread_id="thread-b",
+            )
+
+        await task_manager.stop()
+
+
+class TestHandleWebhookMultiPoc:
+    """Tests for multi-POC webhook handling."""
+
+    @pytest.mark.asyncio
+    async def test_handle_webhook_multi_poc_collects_webhooks(self, task_manager, task_store):
+        """Test that webhooks are collected until all POCs respond."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com", "poc3@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-webhook-task",
+            poc_emails=poc_emails,
+            thread_id="thread-webhook",
+        )
+
+        # First webhook - should NOT resume yet
+        payload1 = WebhookPayload(
+            event="email.received",
+            email_id="email-1",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+
+        result1 = await task_manager.handle_webhook(payload1)
+        assert result1 is True
+
+        # Task should still be suspended (waiting for more webhooks)
+        task = await task_store.get_suspended_task_multi_poc("multi-webhook-task")
+        assert task is not None
+        assert "poc1@example.com" not in task["pending_pocs"]
+        assert "poc2@example.com" in task["pending_pocs"]
+        assert "poc3@example.com" in task["pending_pocs"]
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_handle_webhook_multi_poc_resumes_when_all_received(self, task_manager, task_store):
+        """Test that task resumes when all POCs have responded."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-resume-task",
+            poc_emails=poc_emails,
+            thread_id="thread-resume",
+        )
+
+        # Mock the graph to avoid actual execution
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"process_all_replies": {"success": True}}])
+        )
+
+        # First webhook
+        payload1 = WebhookPayload(
+            event="email.received",
+            email_id="email-1",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload1)
+
+        # Second (last) webhook - should trigger resume
+        payload2 = WebhookPayload(
+            event="email.received",
+            email_id="email-2",
+            from_address="poc2@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:31:00Z",
+        )
+        result2 = await task_manager.handle_webhook(payload2)
+        assert result2 is True
+
+        # Allow background task to run
+        await asyncio.sleep(0.1)
+
+        # Task should no longer be in suspended state
+        task = await task_store.get_suspended_task_multi_poc("multi-resume-task")
+        assert task is None
+
+        # POCs should be removed from mapping
+        assert task_manager.get_task_for_poc("poc1@example.com") is None
+        assert task_manager.get_task_for_poc("poc2@example.com") is None
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_handle_webhook_multi_poc_stores_all_webhooks(self, task_manager, task_store):
+        """Test that all webhook data is stored for resumption."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-store-task",
+            poc_emails=poc_emails,
+            thread_id="thread-store",
+        )
+
+        # First webhook with specific data
+        payload1 = WebhookPayload(
+            event="email.received",
+            email_id="email-unique-1",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request from POC1",
+            has_attachments=True,
+            attachment_count=2,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload1)
+
+        # Check stored webhooks
+        webhooks = await task_store.get_all_webhooks_for_task("multi-store-task")
+        assert "poc1@example.com" in webhooks
+        assert webhooks["poc1@example.com"]["email_id"] == "email-unique-1"
+        assert webhooks["poc1@example.com"]["subject"] == "Re: Request from POC1"
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_handle_webhook_multi_poc_case_insensitive(self, task_manager, task_store):
+        """Test that POC matching is case-insensitive."""
+        await task_manager.start()
+
+        # Register with lowercase
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-case-task",
+            poc_emails=["poc@example.com"],
+            thread_id="thread-case",
+        )
+
+        # Webhook comes with different case
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-case",
+            from_address="POC@EXAMPLE.COM",  # Different case
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+
+        result = await task_manager.handle_webhook(payload)
+        assert result is True
+
+        await task_manager.stop()
+
+
+class TestMultiPocTaskStatus:
+    """Tests for multi-POC task status queries."""
+
+    @pytest.mark.asyncio
+    async def test_get_status_for_multi_poc_suspended_task(self, task_manager):
+        """Test getting status of a multi-POC suspended task."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com", "poc3@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-status-task",
+            poc_emails=poc_emails,
+            thread_id="thread-status",
+        )
+
+        status = await task_manager.get_task_status("multi-status-task")
+
+        assert status.task_id == "multi-status-task"
+        assert status.state == TaskState.SUSPENDED
+        # Should mention multiple POCs
+        assert "3" in status.message or "POC" in status.message
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_get_status_shows_received_count(self, task_manager, task_store):
+        """Test that status shows how many webhooks have been received."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com", "poc3@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-count-task",
+            poc_emails=poc_emails,
+            thread_id="thread-count",
+        )
+
+        # Receive one webhook
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-count",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload)
+
+        status = await task_manager.get_task_status("multi-count-task")
+
+        # Should show progress (1 of 3)
+        assert status.state == TaskState.SUSPENDED
+        # Message should indicate partial progress
+        assert "1" in status.message or "2" in status.message  # 1 received or 2 pending
+
+        await task_manager.stop()
+
+
+class TestMultiPocResumeData:
+    """Tests for resume data construction in multi-POC mode."""
+
+    @pytest.mark.asyncio
+    async def test_resume_data_contains_all_webhooks(self, task_manager, task_store):
+        """Test that resume data includes all collected webhooks."""
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-data-task",
+            poc_emails=poc_emails,
+            thread_id="thread-data",
+        )
+
+        # Receive webhooks
+        for i, poc in enumerate(poc_emails):
+            payload = WebhookPayload(
+                event="email.received",
+                email_id=f"email-data-{i}",
+                from_address=poc,
+                to=["agent@mail.local"],
+                subject=f"Re: Request from {poc}",
+                has_attachments=False,
+                attachment_count=0,
+                received_at="2025-12-15T10:30:00Z",
+            )
+            await task_manager.handle_webhook(payload)
+
+        # Check all webhooks are stored
+        webhooks = await task_store.get_all_webhooks_for_task("multi-data-task")
+        assert len(webhooks) == 2
+        assert "poc1@example.com" in webhooks
+        assert "poc2@example.com" in webhooks
+
+        await task_manager.stop()
+
+
+class TestMultiPocCleanup:
+    """Tests for multi-POC task cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_expired_multi_poc_task_cleanup(self, task_manager, task_store, mock_settings):
+        """Test that expired multi-POC tasks are cleaned up."""
+        # Set very short expiration for testing
+        mock_settings.task_suspend_timeout_seconds = 1
+        mock_settings.expired_task_cleanup_interval_seconds = 1
+
+        await task_manager.start()
+
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-expire-task",
+            poc_emails=poc_emails,
+            thread_id="thread-expire",
+        )
+
+        # Wait for expiration and cleanup
+        await asyncio.sleep(2.5)
+
+        # Task should be expired and cleaned up
+        task = await task_store.get_suspended_task_multi_poc("multi-expire-task")
+        assert task is None
+
+        # POCs should be removed from mapping
+        assert task_manager.get_task_for_poc("poc1@example.com") is None
+        assert task_manager.get_task_for_poc("poc2@example.com") is None
+
+        # Should have a failed result
+        result = await task_store.get_result("multi-expire-task")
+        assert result is not None
+        assert result["status"] == "failed"
+        assert "expired" in result["error"].lower()
+
+        await task_manager.stop()

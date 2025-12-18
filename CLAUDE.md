@@ -75,6 +75,11 @@ pytest --cov=src --cov-report=html
 | **Targeted Follow-up** | `src/mail_agent/agent/nodes/prepare_targeted_followup.py` |
 | **Success Acknowledgment** | `src/mail_agent/agent/nodes/compose_success_all.py`, `send_success_all.py` |
 | **Legacy Success Reply** | `src/mail_agent/agent/nodes/compose_success_reply.py`, `send_success_reply.py` |
+| **Parallel: Compose All** | `src/mail_agent/agent/nodes/compose_all_emails.py` |
+| **Parallel: Send All** | `src/mail_agent/agent/nodes/send_all_emails.py` |
+| **Parallel: Wait All** | `src/mail_agent/agent/nodes/wait_for_all_replies.py` (single interrupt) |
+| **Parallel: Process All** | `src/mail_agent/agent/nodes/process_all_replies.py` |
+| **Parallel: Followup** | `src/mail_agent/agent/nodes/handle_parallel_followup.py` |
 
 ### A2A Protocol & Task Management
 | Feature | Files |
@@ -186,6 +191,70 @@ Redirect Flow:
 - `route_after_validation()` - Conditional routing based on validation result
 
 **Interrupt Point:** `wait_for_reply` node triggers LangGraph interrupt, suspending task until webhook arrives.
+
+---
+
+### 1b. Parallel Processing Mode (Multi-POC)
+
+**Enabled by:** `MAIL_AGENT_PARALLEL_PROCESSING_ENABLED=true` (default)
+
+**Flow (Parallel Mode):**
+```
+START → parse_instruction
+      → compose_all_emails (concurrent LLM calls for all POCs)
+      → send_all_emails (concurrent SMTP sends)
+      → wait_for_all_replies (SINGLE interrupt, waits for ALL POCs)
+      → process_all_replies (concurrent fetch/extract/validate)
+      → [all_valid: validate_cross_poc | some_invalid: handle_parallel_followup]
+      → [success: compose_success_all → send_success_all → END]
+      → [followup: loop back to compose_all_emails with _followup_pocs]
+
+Parallel vs Sequential Processing:
+┌─────────────────────────────────────────────────────────────────────┐
+│ Sequential Mode (legacy):                                            │
+│   POC1: send → wait → process → POC2: send → wait → process → ...   │
+│   Total time: O(T1 + T2 + ... + Tn)                                 │
+│                                                                      │
+│ Parallel Mode (new):                                                 │
+│   ALL POCs: send_all → wait_all → process_all                       │
+│   Total time: O(max(T1, T2, ..., Tn))                               │
+└─────────────────────────────────────────────────────────────────────┘
+
+Webhook Collection Pattern:
+  1. wait_for_all_replies triggers SINGLE interrupt with all POC emails
+  2. TaskManager.suspend_task_multi_poc() registers all POCs → task mapping
+  3. Each webhook arrival is collected (not resuming immediately)
+  4. Only when ALL POCs respond → task resumes with all webhook data
+  5. process_all_replies fetches and validates all replies concurrently
+
+Database Tables (Multi-POC):
+  - suspended_tasks_multi: Task with multiple pending POCs
+  - poc_task_mapping: POC email → task_id lookup
+  - received_webhooks stored in suspended_tasks_multi.received_webhooks (JSON)
+```
+
+**Key Parallel Functions:**
+- `create_mail_agent_graph_parallel()` - Builds parallel graph
+- `compile_mail_agent_graph_parallel(checkpointer)` - Compiles parallel graph
+- `route_after_process_all_replies()` - Routes based on validation results
+- `route_after_parallel_followup()` - Routes to compose or cross-validation
+
+**Parallel State Fields:**
+```python
+# Parallel Processing Fields in AgentState
+_parallel_mode: Optional[bool]                    # True in parallel flow
+_waiting_pocs: Optional[list[str]]                # POCs awaiting replies
+_received_webhooks: Optional[dict[str, dict]]     # Collected webhook data
+_composed_emails: Optional[list[dict]]            # Batch of composed emails
+_poc_processing_results: Optional[dict[str, dict]] # Per-POC validation results
+_all_individual_valid: Optional[bool]             # All POCs valid?
+_followup_pocs: Optional[list[str]]               # POCs needing retry
+```
+
+**TaskManager Multi-POC Methods:**
+- `suspend_task_multi_poc(task_id, poc_emails, thread_id)` - Suspend for multiple POCs
+- `_handle_webhook_multi_poc(payload)` - Collect webhook, check if all received
+- `_resume_task_multi_poc(task_id, thread_id, webhooks)` - Resume with all data
 
 ---
 
@@ -673,6 +742,7 @@ MAIL_AGENT_LLM_MAX_TOKENS=4096
 # Agent Behavior
 MAIL_AGENT_MAX_ATTEMPTS=5
 MAIL_AGENT_SQLITE_DB_PATH=./mail_agent_state.db
+MAIL_AGENT_PARALLEL_PROCESSING_ENABLED=true  # Enable parallel POC processing (default: true)
 
 # A2A Server
 MAIL_AGENT_A2A_HOST=0.0.0.0
@@ -802,7 +872,12 @@ src/
 │   │       ├── decide_next.py
 │   │       ├── handle_redirect.py
 │   │       ├── compose_success_reply.py
-│   │       └── send_success_reply.py
+│   │       ├── send_success_reply.py
+│   │       ├── compose_all_emails.py    # Parallel mode
+│   │       ├── send_all_emails.py       # Parallel mode
+│   │       ├── wait_for_all_replies.py  # Parallel mode
+│   │       ├── process_all_replies.py   # Parallel mode
+│   │       └── handle_parallel_followup.py
 │   ├── a2a/
 │   │   ├── server.py                   # A2A server setup
 │   │   ├── executor.py                 # LangGraph wrapper

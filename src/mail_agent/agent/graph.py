@@ -3,7 +3,8 @@ LangGraph State Machine - Mail Agent graph definition.
 
 Defines the complete state machine for the mail agent workflow.
 Supports multiple POCs (Points of Contact) with:
-- Sequential processing of each POC
+- Sequential processing of each POC (legacy mode)
+- Parallel processing of all POCs simultaneously (new parallel mode)
 - Cross-POC validation for complementary data
 - Targeted follow-ups for specific POCs with missing data
 """
@@ -32,6 +33,13 @@ from mail_agent.agent.nodes.compose_success_reply import compose_success_reply
 from mail_agent.agent.nodes.send_success_reply import send_success_reply
 from mail_agent.agent.nodes.select_next_poc import select_next_poc
 from mail_agent.agent.nodes.check_more_pocs import check_more_pocs
+
+# Parallel processing nodes
+from mail_agent.agent.nodes.compose_all_emails import compose_all_emails
+from mail_agent.agent.nodes.send_all_emails import send_all_emails
+from mail_agent.agent.nodes.wait_for_all_replies import wait_for_all_replies
+from mail_agent.agent.nodes.process_all_replies import process_all_replies
+from mail_agent.agent.nodes.handle_parallel_followup import handle_parallel_followup
 
 
 logger = logging.getLogger(__name__)
@@ -350,4 +358,264 @@ def compile_mail_agent_graph(checkpointer: Any = None) -> Any:
         return graph.compile(checkpointer=checkpointer)
     else:
         logger.info("Compiling graph without checkpointer")
+        return graph.compile()
+
+
+# ============================================================================
+# Parallel Processing Routing Functions
+# ============================================================================
+
+
+def route_after_parse_parallel(
+    state: AgentState,
+) -> Literal["compose_all_emails", "end"]:
+    """
+    Route after parsing instruction in parallel mode.
+
+    Routes to compose_all_emails to compose for all POCs at once,
+    or to end if there's an error or no POCs parsed.
+    """
+    error = state.get("error")
+    if error:
+        logger.debug("Routing after parse (parallel): error -> end")
+        return "end"
+
+    parsed_request = state.get("parsed_request")
+    if parsed_request is None:
+        logger.debug("Routing after parse (parallel): no request -> end")
+        return "end"
+
+    poc_emails = parsed_request.get("poc_emails", [])
+    if not poc_emails:
+        logger.debug("Routing after parse (parallel): no POCs -> end")
+        return "end"
+
+    logger.debug(
+        f"Routing after parse (parallel): {len(poc_emails)} POC(s) -> compose_all_emails"
+    )
+    return "compose_all_emails"
+
+
+def route_after_process_all_replies(
+    state: AgentState,
+) -> Literal["validate_cross_poc", "handle_parallel_followup"]:
+    """
+    Route after processing all POC replies.
+
+    Routes to cross-POC validation if all individual validations passed,
+    or to parallel follow-up handling if some need re-processing.
+    """
+    all_valid = state.get("_all_individual_valid", False)
+    followup_pocs = state.get("_followup_pocs")
+
+    if all_valid:
+        logger.debug("Routing after process_all: all valid -> validate_cross_poc")
+        return "validate_cross_poc"
+    elif followup_pocs:
+        logger.debug(
+            f"Routing after process_all: {len(followup_pocs)} need follow-up "
+            "-> handle_parallel_followup"
+        )
+        return "handle_parallel_followup"
+    else:
+        # All invalid but no followups needed (max attempts reached)
+        logger.debug("Routing after process_all: no follow-ups -> validate_cross_poc")
+        return "validate_cross_poc"
+
+
+def route_after_parallel_followup(
+    state: AgentState,
+) -> Literal["compose_all_emails", "validate_cross_poc"]:
+    """
+    Route after handling parallel follow-up.
+
+    Routes back to compose_all_emails if there are POCs needing follow-up,
+    or to cross-POC validation if all POCs have reached terminal state.
+    """
+    followup_pocs = state.get("_followup_pocs")
+
+    if followup_pocs:
+        logger.debug(
+            f"Routing after parallel followup: {len(followup_pocs)} POCs "
+            "-> compose_all_emails"
+        )
+        return "compose_all_emails"
+    else:
+        logger.debug(
+            "Routing after parallel followup: no more follow-ups -> validate_cross_poc"
+        )
+        return "validate_cross_poc"
+
+
+def route_after_cross_poc_validation_parallel(
+    state: AgentState,
+) -> Literal["compose_success_all", "handle_parallel_followup"]:
+    """
+    Route after cross-POC validation in parallel mode.
+
+    Same as sequential mode but routes to parallel followup handler.
+    """
+    is_valid = state.get("_cross_poc_is_valid", True)
+
+    if is_valid:
+        logger.debug(
+            "Routing after cross-POC validation (parallel): valid -> compose_success_all"
+        )
+        return "compose_success_all"
+    else:
+        logger.debug(
+            "Routing after cross-POC validation (parallel): issues "
+            "-> handle_parallel_followup"
+        )
+        return "handle_parallel_followup"
+
+
+# ============================================================================
+# Parallel Graph Builder
+# ============================================================================
+
+
+def create_mail_agent_graph_parallel() -> StateGraph:
+    """
+    Create the mail agent LangGraph state machine with PARALLEL POC processing.
+
+    This graph sends emails to ALL POCs simultaneously and processes
+    all replies in parallel, significantly reducing total wait time.
+
+    Returns:
+        Compiled StateGraph ready for execution.
+
+    Graph Structure (Parallel Flow):
+        START -> parse_instruction -> compose_all_emails
+              -> send_all_emails -> wait_for_all_replies
+              -> process_all_replies
+              -> [validate_cross_poc | handle_parallel_followup]
+              -> [compose_success_all | loop back for follow-ups]
+              -> END
+
+    Parallel Processing Flow:
+        1. parse_instruction: Parse all POCs from user instruction
+        2. compose_all_emails: Compose emails for ALL POCs (concurrent LLM calls)
+        3. send_all_emails: Send to ALL POCs simultaneously
+        4. wait_for_all_replies: Single interrupt, TaskManager collects webhooks
+        5. process_all_replies: Fetch, extract, validate ALL replies concurrently
+        6. Route to follow-up or cross-POC validation
+        7. Cross-POC validation (same as sequential)
+        8. Success or targeted follow-up
+
+    Time Complexity:
+        Sequential: O(T_poc1 + T_poc2 + ... + T_pocN)
+        Parallel:   O(max(T_poc1, T_poc2, ..., T_pocN))
+    """
+    logger.info("Creating mail agent graph with PARALLEL POC processing")
+
+    graph = StateGraph(AgentState)
+
+    # ========================================================================
+    # Add Nodes
+    # ========================================================================
+
+    # Phase 1: Parse user instruction
+    graph.add_node("parse_instruction", parse_instruction)
+
+    # Phase 2: Parallel Compose and Send
+    graph.add_node("compose_all_emails", compose_all_emails)
+    graph.add_node("send_all_emails", send_all_emails)
+
+    # Phase 3: Parallel Wait
+    graph.add_node("wait_for_all_replies", wait_for_all_replies)
+
+    # Phase 4: Parallel Process
+    graph.add_node("process_all_replies", process_all_replies)
+
+    # Phase 5: Parallel Follow-up Handler
+    graph.add_node("handle_parallel_followup", handle_parallel_followup)
+
+    # Phase 6: Cross-POC validation
+    from mail_agent.agent.nodes.validate_cross_poc import validate_cross_poc
+    graph.add_node("validate_cross_poc", validate_cross_poc)
+
+    # Phase 7: Final result handling
+    from mail_agent.agent.nodes.compose_success_all import compose_success_all
+    from mail_agent.agent.nodes.send_success_all import send_success_all
+    graph.add_node("compose_success_all", compose_success_all)
+    graph.add_node("send_success_all", send_success_all)
+
+    # ========================================================================
+    # Add Edges
+    # ========================================================================
+
+    # Start -> Parse
+    graph.add_edge(START, "parse_instruction")
+
+    # Parse -> Compose All (conditional on having POCs)
+    graph.add_conditional_edges(
+        "parse_instruction",
+        route_after_parse_parallel,
+        {
+            "compose_all_emails": "compose_all_emails",
+            "end": END,
+        },
+    )
+
+    # Linear flow: Compose All -> Send All -> Wait All -> Process All
+    graph.add_edge("compose_all_emails", "send_all_emails")
+    graph.add_edge("send_all_emails", "wait_for_all_replies")
+    graph.add_edge("wait_for_all_replies", "process_all_replies")
+
+    # Process All -> Cross-POC Validation or Parallel Followup
+    graph.add_conditional_edges(
+        "process_all_replies",
+        route_after_process_all_replies,
+        {
+            "validate_cross_poc": "validate_cross_poc",
+            "handle_parallel_followup": "handle_parallel_followup",
+        },
+    )
+
+    # Parallel Followup -> Compose All (retry) or Cross-POC Validation
+    graph.add_conditional_edges(
+        "handle_parallel_followup",
+        route_after_parallel_followup,
+        {
+            "compose_all_emails": "compose_all_emails",
+            "validate_cross_poc": "validate_cross_poc",
+        },
+    )
+
+    # Cross-POC Validation -> Success All or Parallel Followup
+    graph.add_conditional_edges(
+        "validate_cross_poc",
+        route_after_cross_poc_validation_parallel,
+        {
+            "compose_success_all": "compose_success_all",
+            "handle_parallel_followup": "handle_parallel_followup",
+        },
+    )
+
+    # Success All -> Send Success All -> End
+    graph.add_edge("compose_success_all", "send_success_all")
+    graph.add_edge("send_success_all", END)
+
+    logger.info("Mail agent PARALLEL graph created successfully")
+    return graph
+
+
+def compile_mail_agent_graph_parallel(checkpointer: Any = None) -> Any:
+    """
+    Compile the PARALLEL mail agent graph with optional checkpointer.
+
+    Args:
+        checkpointer: Optional SQLite checkpointer for state persistence.
+
+    Returns:
+        Compiled graph ready for invocation.
+    """
+    graph = create_mail_agent_graph_parallel()
+
+    if checkpointer:
+        logger.info("Compiling PARALLEL graph with checkpointer")
+        return graph.compile(checkpointer=checkpointer)
+    else:
+        logger.info("Compiling PARALLEL graph without checkpointer")
         return graph.compile()

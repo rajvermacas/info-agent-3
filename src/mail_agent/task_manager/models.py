@@ -87,7 +87,7 @@ class TaskStatus(BaseModel):
 
 class SuspendedTaskInfo(BaseModel):
     """
-    Information about a suspended task.
+    Information about a suspended task (single POC - legacy).
 
     Used internally to track suspended tasks and their checkpoint references.
     """
@@ -105,6 +105,48 @@ class SuspendedTaskInfo(BaseModel):
     def is_expired(self) -> bool:
         """Check if the task has expired."""
         return datetime.now(self.created_at.tzinfo) > self.expires_at
+
+
+class MultiPocSuspendedTaskInfo(BaseModel):
+    """
+    Information about a multi-POC suspended task (parallel processing).
+
+    Used for parallel processing where a task waits for multiple POC replies
+    before resuming execution.
+    """
+
+    task_id: str = Field(description="Unique task identifier")
+    poc_emails: list[str] = Field(description="All POC emails the task is waiting for")
+    pending_pocs: list[str] = Field(
+        description="POC emails that have not yet responded"
+    )
+    received_webhooks: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Webhooks received so far, keyed by POC email",
+    )
+    thread_id: str = Field(description="LangGraph thread ID for checkpoint")
+    created_at: datetime = Field(description="When task was suspended")
+    expires_at: datetime = Field(description="When task will expire")
+    interrupt_data: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Data from the interrupt point",
+    )
+
+    def is_expired(self) -> bool:
+        """Check if the task has expired."""
+        return datetime.now(self.created_at.tzinfo) > self.expires_at
+
+    def all_received(self) -> bool:
+        """Check if all POCs have responded."""
+        return len(self.pending_pocs) == 0
+
+    def remaining_count(self) -> int:
+        """Get the number of POCs still waiting for response."""
+        return len(self.pending_pocs)
+
+    def received_count(self) -> int:
+        """Get the number of POCs that have responded."""
+        return len(self.received_webhooks)
 
 
 class TaskResult(BaseModel):

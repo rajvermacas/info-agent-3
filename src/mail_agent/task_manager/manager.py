@@ -22,10 +22,11 @@ from mail_agent.config import Settings, get_settings
 from mail_agent.persistence.database import DatabaseManager
 from mail_agent.persistence.task_store import TaskStore
 from mail_agent.task_manager.models import (
-    TaskState,
-    TaskStatus,
+    MultiPocSuspendedTaskInfo,
     SuspendedTaskInfo,
     TaskResult,
+    TaskState,
+    TaskStatus,
     WebhookPayload,
 )
 
@@ -265,6 +266,75 @@ class TaskManager:
             raise TaskManagerError(f"Failed to suspend task: {e}") from e
 
     # =========================================================================
+    # Multi-POC Task Suspension (Parallel Processing)
+    # =========================================================================
+
+    async def suspend_task_multi_poc(
+        self,
+        task_id: str,
+        poc_emails: list[str],
+        thread_id: str,
+        interrupt_data: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """
+        Suspend a task waiting for multiple POC replies (parallel processing).
+
+        Called when the graph reaches wait_for_all_replies node.
+        Registers all POCs for webhook routing and persists to database.
+
+        Args:
+            task_id: A2A task identifier.
+            poc_emails: List of POC email addresses to wait for.
+            thread_id: LangGraph thread ID (same as task_id typically).
+            interrupt_data: Data from the interrupt point.
+
+        Raises:
+            TaskManagerError: If task cannot be suspended.
+        """
+        poc_emails_lower = [poc.lower() for poc in poc_emails]
+
+        logger.info(
+            f"Suspending multi-POC task {task_id} waiting for {len(poc_emails)} POCs: "
+            f"{poc_emails_lower}"
+        )
+
+        async with self._lock:
+            # Check for duplicate POC registrations
+            for poc_email in poc_emails_lower:
+                if poc_email in self._poc_to_task:
+                    existing_task = self._poc_to_task[poc_email]
+                    if existing_task != task_id:
+                        raise TaskManagerError(
+                            f"POC {poc_email} already has pending task {existing_task}"
+                        )
+
+            # Register all POCs in memory
+            for poc_email in poc_emails_lower:
+                self._poc_to_task[poc_email] = task_id
+
+        # Persist to database
+        try:
+            await self._task_store.suspend_task_multi_poc(
+                task_id=task_id,
+                poc_emails=poc_emails_lower,
+                thread_id=thread_id,
+                timeout_seconds=self._settings.task_suspend_timeout_seconds,
+                interrupt_data=interrupt_data,
+            )
+            logger.info(
+                f"Multi-POC task {task_id} suspended successfully, "
+                f"waiting for {len(poc_emails)} POCs"
+            )
+
+        except Exception as e:
+            # Rollback in-memory registrations on failure
+            async with self._lock:
+                for poc_email in poc_emails_lower:
+                    if self._poc_to_task.get(poc_email) == task_id:
+                        del self._poc_to_task[poc_email]
+            raise TaskManagerError(f"Failed to suspend multi-POC task: {e}") from e
+
+    # =========================================================================
     # Webhook Handling
     # =========================================================================
 
@@ -272,13 +342,14 @@ class TaskManager:
         """
         Handle incoming webhook and route to correct suspended task.
 
-        Looks up the task by sender email and triggers task resumption.
+        Supports both single-POC (legacy) and multi-POC (parallel) modes.
+        For multi-POC, collects webhooks and only resumes when all POCs respond.
 
         Args:
             payload: Webhook payload with email notification.
 
         Returns:
-            True if webhook was handled (task found and resumed),
+            True if webhook was handled (task found, collected or resumed),
             False if no matching suspended task.
         """
         sender = payload.from_address.lower()
@@ -292,10 +363,39 @@ class TaskManager:
             logger.warning(f"No suspended task for sender: {sender}")
             return False
 
+        # First check if this is a multi-POC task
+        multi_poc_task = await self._task_store.get_suspended_task_multi_poc(task_id)
+        if multi_poc_task is not None:
+            return await self._handle_webhook_multi_poc(
+                task_id, sender, payload, multi_poc_task
+            )
+
+        # Otherwise handle as single-POC (legacy)
+        return await self._handle_webhook_single_poc(task_id, sender, payload)
+
+    async def _handle_webhook_single_poc(
+        self,
+        task_id: str,
+        sender: str,
+        payload: WebhookPayload,
+    ) -> bool:
+        """
+        Handle webhook for single-POC task (legacy mode).
+
+        Args:
+            task_id: Task identifier.
+            sender: Sender email address (lowercase).
+            payload: Webhook payload.
+
+        Returns:
+            True if handled successfully.
+        """
+        logger.debug(f"Handling single-POC webhook for task {task_id}")
+
         # Get suspended task info
         task_info = await self._task_store.get_suspended_task(task_id)
         if task_info is None:
-            logger.error(f"Task {task_id} in memory but not in database")
+            logger.error(f"Single-POC task {task_id} in memory but not in database")
             async with self._lock:
                 if sender in self._poc_to_task:
                     del self._poc_to_task[sender]
@@ -307,7 +407,7 @@ class TaskManager:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         if datetime.now(timezone.utc) > expires_at:
-            logger.warning(f"Task {task_id} expired, ignoring webhook")
+            logger.warning(f"Single-POC task {task_id} expired, ignoring webhook")
             await self._handle_expired_task(task_id, sender)
             return False
 
@@ -319,9 +419,98 @@ class TaskManager:
         await self._task_store.remove_suspended_task(task_id)
 
         # Resume task in background
-        logger.info(f"Resuming task {task_id} with webhook data")
+        logger.info(f"Resuming single-POC task {task_id} with webhook data")
         asyncio.create_task(
             self._resume_task(task_id, task_info["thread_id"], payload)
+        )
+
+        return True
+
+    async def _handle_webhook_multi_poc(
+        self,
+        task_id: str,
+        sender: str,
+        payload: WebhookPayload,
+        task_info: dict[str, Any],
+    ) -> bool:
+        """
+        Handle webhook for multi-POC task (parallel mode).
+
+        Collects webhooks from each POC and only resumes when all have responded.
+
+        Args:
+            task_id: Task identifier.
+            sender: Sender email address (lowercase).
+            payload: Webhook payload.
+            task_info: Multi-POC task info dict.
+
+        Returns:
+            True if handled successfully.
+        """
+        logger.debug(
+            f"Handling multi-POC webhook for task {task_id} from {sender}, "
+            f"pending={len(task_info['pending_pocs'])}"
+        )
+
+        # Check expiration
+        expires_at = datetime.fromisoformat(task_info["expires_at"])
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if datetime.now(timezone.utc) > expires_at:
+            logger.warning(f"Multi-POC task {task_id} expired, ignoring webhook")
+            await self._handle_expired_task_multi_poc(
+                task_id, task_info["poc_emails"]
+            )
+            return False
+
+        # Record this webhook
+        webhook_data = payload.to_resume_data()
+        all_received, remaining = await self._task_store.record_webhook_received(
+            task_id=task_id,
+            poc_email=sender,
+            webhook_data=webhook_data,
+        )
+
+        logger.info(
+            f"Webhook from {sender} recorded for task {task_id}, "
+            f"all_received={all_received}, remaining={remaining}"
+        )
+
+        if not all_received:
+            # Still waiting for more POCs - don't resume yet
+            logger.info(
+                f"Task {task_id} still waiting for {remaining} more POC(s)"
+            )
+            return True
+
+        # All POCs have responded - prepare to resume
+        logger.info(
+            f"All {len(task_info['poc_emails'])} POCs have responded for task {task_id}, "
+            "preparing to resume"
+        )
+
+        # Get all collected webhooks
+        all_webhooks = await self._task_store.get_all_webhooks_for_task(task_id)
+
+        # Remove from in-memory mapping
+        async with self._lock:
+            for poc_email in task_info["poc_emails"]:
+                poc_lower = poc_email.lower()
+                if poc_lower in self._poc_to_task:
+                    del self._poc_to_task[poc_lower]
+
+        # Remove from database
+        await self._task_store.remove_suspended_task_multi_poc(task_id)
+
+        # Resume task in background with all webhook data
+        logger.info(
+            f"Resuming multi-POC task {task_id} with {len(all_webhooks)} webhooks"
+        )
+        asyncio.create_task(
+            self._resume_task_multi_poc(
+                task_id, task_info["thread_id"], all_webhooks
+            )
         )
 
         return True
@@ -507,6 +696,159 @@ class TaskManager:
                 error="Re-suspend without POC email",
             )
 
+    async def _resume_task_multi_poc(
+        self,
+        task_id: str,
+        thread_id: str,
+        all_webhooks: dict[str, dict[str, Any]],
+    ) -> None:
+        """
+        Resume a multi-POC suspended task from checkpoint.
+
+        Runs the graph from the interrupt point with all collected webhook data.
+
+        Args:
+            task_id: Task identifier.
+            thread_id: LangGraph thread ID.
+            all_webhooks: Dict mapping POC email to webhook data.
+        """
+        logger.info(
+            f"Resuming multi-POC task {task_id} from checkpoint with "
+            f"{len(all_webhooks)} webhooks"
+        )
+
+        config = {"configurable": {"thread_id": thread_id}}
+
+        # Multi-POC resume data includes all webhook payloads
+        resume_data = {
+            "webhooks": all_webhooks,
+            "parallel_mode": True,
+            "poc_count": len(all_webhooks),
+        }
+
+        try:
+            # Create resume command
+            command = Command(resume=resume_data)
+
+            # Stream resumed execution
+            final_state: Optional[dict[str, Any]] = None
+
+            async for event in self._graph.astream(command, config=config):
+                for node_name, node_output in event.items():
+                    logger.debug(f"Multi-POC task {task_id}: Node {node_name} completed")
+
+                    # Check for another interrupt (parallel retry scenario)
+                    if self._is_interrupt_event(event):
+                        logger.info(
+                            f"Multi-POC task {task_id} interrupted again (retry)"
+                        )
+                        await self._handle_re_suspend_multi_poc(
+                            task_id, event, thread_id
+                        )
+                        return
+
+                    # Track final state
+                    if final_state is None:
+                        final_state = {}
+                    final_state.update(node_output)
+
+            # Store result
+            if final_state:
+                success = not final_state.get("error")
+                status = "completed" if success else "failed"
+                await self._task_store.save_result(
+                    task_id=task_id,
+                    status=status,
+                    result=final_state if success else None,
+                    error=final_state.get("error"),
+                )
+                logger.info(
+                    f"Multi-POC task {task_id} resumed and completed with status: {status}"
+                )
+            else:
+                await self._task_store.save_result(
+                    task_id=task_id,
+                    status="failed",
+                    error="Graph completed without final state",
+                )
+                logger.error(f"Multi-POC task {task_id} completed without final state")
+
+        except Exception as e:
+            logger.exception(f"Multi-POC task {task_id} failed during resume: {e}")
+            await self._task_store.save_result(
+                task_id=task_id,
+                status="failed",
+                error=str(e),
+            )
+
+    async def _handle_re_suspend_multi_poc(
+        self,
+        task_id: str,
+        event: dict[str, Any],
+        thread_id: str,
+    ) -> None:
+        """Handle re-suspension during multi-POC retry scenario."""
+        raw_interrupt = event.get("__interrupt__", {})
+        interrupt_data = self._parse_interrupt_info(raw_interrupt)
+
+        # Check for multi-POC interrupt
+        poc_emails = interrupt_data.get("poc_emails")
+        if poc_emails and isinstance(poc_emails, list):
+            await self.suspend_task_multi_poc(
+                task_id=task_id,
+                poc_emails=poc_emails,
+                thread_id=thread_id,
+                interrupt_data=interrupt_data,
+            )
+            return
+
+        # Fall back to single-POC if only one POC in interrupt
+        poc_email = interrupt_data.get("poc_email")
+        if poc_email:
+            await self.suspend_task(
+                task_id=task_id,
+                poc_email=poc_email,
+                thread_id=thread_id,
+                interrupt_data=interrupt_data,
+            )
+        else:
+            logger.error(f"Multi-POC re-suspend without POC email(s) for task {task_id}")
+            await self._task_store.save_result(
+                task_id=task_id,
+                status="failed",
+                error="Re-suspend without POC email(s)",
+            )
+
+    async def _handle_expired_task_multi_poc(
+        self,
+        task_id: str,
+        poc_emails: list[str],
+    ) -> None:
+        """Handle an expired multi-POC task - remove from state and store failure."""
+        logger.info(f"Handling expired multi-POC task {task_id}")
+
+        # Remove all POCs from in-memory mapping
+        async with self._lock:
+            for poc_email in poc_emails:
+                poc_lower = poc_email.lower()
+                if poc_lower in self._poc_to_task:
+                    del self._poc_to_task[poc_lower]
+
+        # Remove from database
+        await self._task_store.remove_suspended_task_multi_poc(task_id)
+
+        # Store failure result
+        await self._task_store.save_result(
+            task_id=task_id,
+            status="failed",
+            error=(
+                f"Multi-POC task expired: no complete reply received within "
+                f"{self._settings.task_suspend_timeout_seconds} seconds"
+            ),
+        )
+
+        logger.info(f"Expired multi-POC task {task_id} cleaned up")
+
     # =========================================================================
     # Task Status
     # =========================================================================
@@ -515,7 +857,7 @@ class TaskManager:
         """
         Get current status of a task.
 
-        Checks suspended tasks, then results, to determine task state.
+        Checks suspended tasks (single and multi-POC), then results.
 
         Args:
             task_id: Task identifier.
@@ -528,7 +870,7 @@ class TaskManager:
         """
         logger.debug(f"Getting status for task {task_id}")
 
-        # Check suspended tasks first
+        # Check single-POC suspended tasks first
         suspended = await self._task_store.get_suspended_task(task_id)
         if suspended:
             created_at = datetime.fromisoformat(suspended["created_at"])
@@ -539,6 +881,27 @@ class TaskManager:
                 state=TaskState.SUSPENDED,
                 message=f"Waiting for reply from {suspended['poc_email']}",
                 poc_email=suspended["poc_email"],
+                created_at=created_at,
+                expires_at=expires_at,
+            )
+
+        # Check multi-POC suspended tasks
+        multi_suspended = await self._task_store.get_suspended_task_multi_poc(task_id)
+        if multi_suspended:
+            created_at = datetime.fromisoformat(multi_suspended["created_at"])
+            expires_at = datetime.fromisoformat(multi_suspended["expires_at"])
+            pending_count = len(multi_suspended["pending_pocs"])
+            total_count = len(multi_suspended["poc_emails"])
+            received_count = total_count - pending_count
+
+            return TaskStatus(
+                task_id=task_id,
+                state=TaskState.SUSPENDED,
+                message=(
+                    f"Waiting for {pending_count} of {total_count} POC replies "
+                    f"({received_count} received)"
+                ),
+                poc_email=", ".join(multi_suspended["pending_pocs"]),
                 created_at=created_at,
                 expires_at=expires_at,
             )

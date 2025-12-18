@@ -326,6 +326,34 @@ class AgentState(TypedDict, total=False):
     # Success acknowledgment emails (composed by compose_success_all)
     _success_emails: Optional[list[dict[str, Any]]]  # [{poc_email, subject, body}]
 
+    # =========================================================================
+    # Parallel Processing Fields (Multi-POC)
+    # =========================================================================
+
+    # Flag indicating parallel processing mode is active
+    _parallel_mode: Optional[bool]
+
+    # List of POC emails currently waiting for replies (parallel wait)
+    _waiting_pocs: Optional[list[str]]
+
+    # Received webhook data collected during parallel wait (before all arrive)
+    # Format: {poc_email: {email_id, from_address, subject, has_attachments, received_at}}
+    _received_webhooks: Optional[dict[str, dict[str, Any]]]
+
+    # Composed emails for all POCs (before bulk send)
+    # Format: [{poc_email, subject, body}]
+    _composed_emails: Optional[list[dict[str, Any]]]
+
+    # Results from parallel POC processing branches
+    # Format: {poc_email: {is_valid, feedback, missing_items, extracted_content}}
+    _poc_processing_results: Optional[dict[str, dict[str, Any]]]
+
+    # Flag indicating all individual POC validations passed (before cross-POC)
+    _all_individual_valid: Optional[bool]
+
+    # POCs that need follow-up in parallel mode (subset of waiting_pocs)
+    _followup_pocs: Optional[list[str]]
+
 
 # ============================================================================
 # State Helper Functions
@@ -459,3 +487,69 @@ def get_active_poc(state: AgentState) -> Optional[str]:
             return poc_email
 
     return None
+
+
+def is_parallel_mode(state: AgentState) -> bool:
+    """
+    Check if parallel processing mode is enabled.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        True if parallel mode is active.
+    """
+    return state.get("_parallel_mode", False) is True
+
+
+def get_pending_pocs(state: AgentState) -> list[str]:
+    """
+    Get list of POCs that are pending (not yet processed).
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        List of POC email addresses with pending status.
+    """
+    conversations = state.get("conversations", {})
+    pending = []
+
+    for poc_email, conv_dict in conversations.items():
+        status = conv_dict.get("status")
+        if status == "pending":
+            pending.append(poc_email)
+
+    return pending
+
+
+def get_waiting_pocs(state: AgentState) -> list[str]:
+    """
+    Get list of POCs currently waiting for replies.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        List of POC email addresses in waiting status.
+    """
+    return state.get("_waiting_pocs", [])
+
+
+def all_webhooks_received(state: AgentState) -> bool:
+    """
+    Check if all expected webhooks have been received in parallel mode.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        True if all waiting POCs have received webhooks.
+    """
+    waiting_pocs = set(state.get("_waiting_pocs", []))
+    received_webhooks = state.get("_received_webhooks", {})
+
+    if not waiting_pocs:
+        return False
+
+    return all(poc.lower() in received_webhooks for poc in waiting_pocs)
