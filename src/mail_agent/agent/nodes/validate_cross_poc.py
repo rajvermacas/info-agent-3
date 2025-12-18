@@ -122,12 +122,23 @@ async def validate_cross_poc(state: AgentState) -> dict[str, Any]:
         logger.debug(f"Cross-POC validation prompt length: {len(prompt)} chars")
 
         # Call LLM for validation
-        # Use higher max_tokens (16384) because cross-POC validation with multiple POCs
-        # and detailed issues can produce long responses that exceed the default 4096 limit
+        # Use conservative max_tokens (2048) to prevent response truncation.
+        # The prompt includes strict conciseness constraints to keep output small.
+        # Reasoning models may use internal tokens, so we limit output to force brevity.
+        logger.info(
+            f"Calling LLM for cross-POC validation with prompt length={len(prompt)}, "
+            f"poc_count={len(poc_data)}, model={llm_client.model_name}"
+        )
+
         response = await llm_client.generate_structured(
             prompt=prompt,
             output_schema=CrossPOCValidationResponse,
-            max_tokens=16384,
+            max_tokens=2048,
+        )
+
+        logger.info(
+            f"LLM response received for cross-POC validation: is_valid={response.is_valid}, "
+            f"issues_count={len(response.issues)}, summary_length={len(response.summary)}"
         )
 
         is_valid = response.is_valid
@@ -166,7 +177,25 @@ async def validate_cross_poc(state: AgentState) -> dict[str, Any]:
         }
 
     except Exception as e:
-        logger.exception(f"Cross-POC validation failed with error: {e}")
+        error_str = str(e)
+        logger.exception(
+            f"Cross-POC validation failed: {type(e).__name__}: {error_str}"
+        )
+
+        # Check for specific token limit error
+        if "length limit was reached" in error_str:
+            logger.warning(
+                "LLM response was truncated due to token limit. "
+                "This may indicate the POC data is too large for validation. "
+                "Proceeding with fail-open assumption (valid=True)."
+            )
+            error_msg = (
+                "Response exceeded token limit. Data from POCs is large - "
+                "skipping detailed cross-reference validation."
+            )
+        else:
+            error_msg = str(e)
+
         # On error, assume valid to avoid blocking (fail-open for UX)
         return {
             "_cross_poc_validation_complete": True,
@@ -174,9 +203,9 @@ async def validate_cross_poc(state: AgentState) -> dict[str, Any]:
             "_cross_poc_issues": [],
             "_cross_poc_missing_data": {},
             "current_node": "validate_cross_poc",
-            "error": f"Cross-POC validation error: {str(e)}",
+            "error": f"Cross-POC validation error: {error_msg}",
             "progress_messages": [
-                f"Cross-POC validation encountered error: {str(e)}. "
+                f"Cross-POC validation encountered error: {error_msg}. "
                 "Proceeding with success acknowledgment."
             ],
         }

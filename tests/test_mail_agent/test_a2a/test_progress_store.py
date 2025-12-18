@@ -464,3 +464,151 @@ class TestProgressStore:
         # Should have received: initial (replay) + 2 new events
         assert len(received) >= 2
         assert received[-1].state == TaskState.COMPLETED
+
+
+class TestGetActiveTasks:
+    """Tests for get_active_tasks method."""
+
+    @pytest.mark.asyncio
+    async def test_get_active_tasks_returns_working_tasks(self):
+        """Test that working tasks are returned as active."""
+        store = ProgressStore()
+
+        # Add a working task
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-working-1",
+                state=TaskState.WORKING,
+                node="compose_email",
+                message="Composing email...",
+            )
+        )
+
+        active = store.get_active_tasks()
+
+        assert len(active) == 1
+        assert active[0]["task_id"] == "task-working-1"
+        assert active[0]["state"] == "working"
+        assert active[0]["latest_message"] == "Composing email..."
+        assert active[0]["latest_node"] == "compose_email"
+
+    @pytest.mark.asyncio
+    async def test_get_active_tasks_excludes_completed_tasks(self):
+        """Test that completed tasks are not returned as active."""
+        store = ProgressStore()
+
+        # Add a task that completes
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-completed-1",
+                state=TaskState.WORKING,
+                message="Starting...",
+            )
+        )
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-completed-1",
+                state=TaskState.COMPLETED,
+                message="Done",
+            )
+        )
+
+        active = store.get_active_tasks()
+
+        # Should not include completed task
+        task_ids = [t["task_id"] for t in active]
+        assert "task-completed-1" not in task_ids
+
+    @pytest.mark.asyncio
+    async def test_get_active_tasks_excludes_suspended_tasks(self):
+        """Test that suspended tasks are not returned as active."""
+        store = ProgressStore()
+
+        # Add a task that gets suspended
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-suspended-1",
+                state=TaskState.WORKING,
+                message="Starting...",
+            )
+        )
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-suspended-1",
+                state=TaskState.SUSPENDED,
+                message="Waiting for reply from poc@example.com",
+                poc_email="poc@example.com",
+            )
+        )
+
+        active = store.get_active_tasks()
+
+        # Should not include suspended task (tracked in suspended_tasks table)
+        task_ids = [t["task_id"] for t in active]
+        assert "task-suspended-1" not in task_ids
+
+    @pytest.mark.asyncio
+    async def test_get_active_tasks_multiple_working_tasks(self):
+        """Test that multiple working tasks are returned."""
+        store = ProgressStore()
+
+        # Add multiple working tasks
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-a",
+                state=TaskState.WORKING,
+                node="node-a",
+                message="Task A working",
+            )
+        )
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-b",
+                state=TaskState.WORKING,
+                node="node-b",
+                message="Task B working",
+            )
+        )
+
+        active = store.get_active_tasks()
+
+        assert len(active) == 2
+        task_ids = {t["task_id"] for t in active}
+        assert task_ids == {"task-a", "task-b"}
+
+    @pytest.mark.asyncio
+    async def test_get_active_tasks_empty_store(self):
+        """Test that empty store returns empty list."""
+        store = ProgressStore()
+
+        active = store.get_active_tasks()
+
+        assert active == []
+
+    @pytest.mark.asyncio
+    async def test_get_active_tasks_excludes_failed_tasks(self):
+        """Test that failed tasks are not returned as active."""
+        store = ProgressStore()
+
+        # Add a task that fails
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-failed-1",
+                state=TaskState.WORKING,
+                message="Starting...",
+            )
+        )
+        await store.add_event(
+            ProgressEvent(
+                task_id="task-failed-1",
+                state=TaskState.FAILED,
+                message="Task failed",
+                error="Some error",
+            )
+        )
+
+        active = store.get_active_tasks()
+
+        # Should not include failed task
+        task_ids = [t["task_id"] for t in active]
+        assert "task-failed-1" not in task_ids

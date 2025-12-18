@@ -561,6 +561,33 @@ class TaskManager:
         # Task not found
         raise TaskNotFoundError(f"Task not found: {task_id}")
 
+    async def save_result(
+        self,
+        task_id: str,
+        status: str,
+        result: Optional[dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """
+        Save a task result to persistent storage.
+
+        Called by the executor when a task completes without suspension,
+        or when a task fails during execution.
+
+        Args:
+            task_id: Task identifier.
+            status: Task status ('completed' or 'failed').
+            result: Optional result data for completed tasks.
+            error: Optional error message for failed tasks.
+        """
+        logger.info(f"Saving result for task {task_id}: status={status}")
+        await self._task_store.save_result(
+            task_id=task_id,
+            status=status,
+            result=result,
+            error=error,
+        )
+
     async def list_all_tasks(self) -> list[TaskStatus]:
         """
         List all tasks (suspended and completed/failed).

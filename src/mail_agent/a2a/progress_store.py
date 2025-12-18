@@ -409,3 +409,38 @@ class ProgressStore:
             Number of tasks in store.
         """
         return len(self._tasks)
+
+    def get_active_tasks(self) -> list[dict[str, Any]]:
+        """
+        Get all active (non-terminal, non-suspended) tasks.
+
+        Returns:
+            List of dicts with task_id, state, latest_message, latest_node, and started_at.
+        """
+        active_tasks = []
+        for task_id, task_queue in self._tasks.items():
+            # Skip terminal tasks (they're in task_results table)
+            if task_queue.is_terminal:
+                continue
+
+            # Skip suspended tasks (they're tracked in suspended_tasks table)
+            # Check the last event state
+            events = task_queue.events
+            if events:
+                last_event = events[-1]
+                if last_event.state == TaskState.SUSPENDED:
+                    continue
+
+                # Get first event for started_at
+                first_event = events[0]
+
+                active_tasks.append({
+                    "task_id": task_id,
+                    "state": last_event.state.value,
+                    "latest_message": last_event.message,
+                    "latest_node": last_event.node,
+                    "started_at": first_event.timestamp.isoformat(),
+                })
+
+        logger.debug(f"Found {len(active_tasks)} active (in-flight) tasks")
+        return active_tasks

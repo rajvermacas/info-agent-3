@@ -14,6 +14,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from mail_agent.task_manager import TaskManager, TaskStatus, TaskState
 
 
+# Import TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mail_agent.a2a.progress_store import ProgressStore
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,12 +98,16 @@ class TaskNotFoundResponse(BaseModel):
 # ============================================================================
 
 
-def create_tasks_router(task_manager: TaskManager) -> APIRouter:
+def create_tasks_router(
+    task_manager: TaskManager,
+    progress_store: "ProgressStore | None" = None,
+) -> APIRouter:
     """
     Create the tasks router with dependency injection.
 
     Args:
         task_manager: TaskManager instance for querying task status.
+        progress_store: Optional ProgressStore for tracking in-flight tasks.
 
     Returns:
         Configured APIRouter with task endpoints.
@@ -175,22 +186,24 @@ def create_tasks_router(task_manager: TaskManager) -> APIRouter:
     @router.get(
         "",
         summary="List all tasks",
-        description="Get a list of all tasks (suspended, completed, and failed).",
+        description="Get a list of all tasks (active, suspended, completed, and failed).",
     )
     async def list_all_tasks_endpoint() -> dict[str, Any]:
         """
         List all tasks.
 
-        Returns all tasks from the system including suspended (waiting for reply),
-        completed, and failed tasks.
+        Returns all tasks from the system including active (in-flight),
+        suspended (waiting for reply), completed, and failed tasks.
 
         Returns:
             Dictionary with tasks list containing task details.
         """
         logger.info("GET /tasks - listing all tasks")
 
+        # Get suspended and completed/failed tasks from task manager
         all_tasks = await task_manager.list_all_tasks()
 
+        # Convert to list of dicts
         tasks_list = [
             {
                 "task_id": task.task_id,
@@ -204,6 +217,32 @@ def create_tasks_router(task_manager: TaskManager) -> APIRouter:
             }
             for task in all_tasks
         ]
+
+        # Get active (in-flight) tasks from progress store
+        if progress_store is not None:
+            active_tasks = progress_store.get_active_tasks()
+            existing_task_ids = {t["task_id"] for t in tasks_list}
+
+            for active_task in active_tasks:
+                # Skip if already in list (shouldn't happen, but be safe)
+                if active_task["task_id"] in existing_task_ids:
+                    continue
+
+                tasks_list.append({
+                    "task_id": active_task["task_id"],
+                    "state": active_task["state"],
+                    "message": active_task["latest_message"],
+                    "poc_email": None,
+                    "created_at": active_task["started_at"],
+                    "completed_at": None,
+                    "result": None,
+                    "error": None,
+                })
+
+            logger.info(
+                f"GET /tasks - found {len(active_tasks)} active tasks, "
+                f"{len(all_tasks)} persisted tasks"
+            )
 
         logger.info(f"GET /tasks - returning {len(tasks_list)} tasks")
 

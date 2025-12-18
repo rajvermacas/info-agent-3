@@ -163,7 +163,7 @@ async def create_a2a_application(
     # 12. Mount task and progress routes as FastAPI sub-application
     # FastAPI routes need FastAPI's dependency injection and routing,
     # so we mount a FastAPI app instead of converting routes manually.
-    tasks_router = create_tasks_router(task_manager)
+    tasks_router = create_tasks_router(task_manager, progress_store)
     progress_router = create_progress_router(progress_store)
     from fastapi import FastAPI as TaskFastAPI
     from starlette.routing import Mount

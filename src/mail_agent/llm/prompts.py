@@ -437,7 +437,15 @@ For each issue found, specify:
 - missing_items: Specific IDs/items that are missing
 
 If all data is consistent and complete, set is_valid=true with an empty issues list.
-If issues exist, set is_valid=false and list all issues found."""
+If issues exist, set is_valid=false and list all issues found.
+
+CRITICAL OUTPUT CONSTRAINTS - You MUST follow these:
+1. summary: Maximum 50 words. Be extremely brief.
+2. details: Maximum 20 words per issue. No explanations, just state the fact.
+3. missing_items: Only IDs/values as strings, no descriptions. Example: ["5", "10", "ABC123"]
+4. Do NOT repeat or echo the input data in your response.
+5. Do NOT include reasoning or analysis in your output - only the structured result.
+6. Total response must be under 500 words."""
 
     @staticmethod
     def compose_multi_poc_success_acknowledgment(

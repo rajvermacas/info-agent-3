@@ -115,7 +115,7 @@ class MailAgentA2AExecutor(AgentExecutor):
                 initial_state, task_id, event_queue
             )
 
-            # 4. If we got a result (not suspended), send response
+            # 4. If we got a result (not suspended), send response and save to DB
             if result is not None:
                 response_text = self._build_response_text(result, task_id)
                 response_message = Message(
@@ -125,6 +125,24 @@ class MailAgentA2AExecutor(AgentExecutor):
                 )
                 await event_queue.enqueue_event(response_message)
                 logger.info(f"Task {task_id}: Response sent")
+
+                # Save result to database for task listing
+                try:
+                    error = result.get("error")
+                    status = "failed" if error else "completed"
+                    await self.task_manager.save_result(
+                        task_id=task_id,
+                        status=status,
+                        result=result if not error else None,
+                        error=error,
+                    )
+                    logger.info(
+                        f"Task {task_id}: Result saved to database (status={status})"
+                    )
+                except Exception as save_error:
+                    logger.error(
+                        f"Task {task_id}: Failed to save result to database: {save_error}"
+                    )
 
         except ValueError as e:
             logger.error(f"Task {task_id}: Invalid request: {e}")
@@ -299,10 +317,10 @@ class MailAgentA2AExecutor(AgentExecutor):
                     final_state = dict(initial_state)
                 final_state.update(node_output)
 
-                # Check for terminal nodes
-                if node_name in ("handle_success", "handle_failure"):
+                # Check for terminal nodes (single-POC and multi-POC success flows)
+                if node_name in ("handle_success", "handle_failure", "send_success_all"):
                     # Task completed
-                    is_success = node_name == "handle_success"
+                    is_success = node_name in ("handle_success", "send_success_all")
                     state = TaskState.COMPLETED if is_success else TaskState.FAILED
 
                     await self._emit_sse_event(

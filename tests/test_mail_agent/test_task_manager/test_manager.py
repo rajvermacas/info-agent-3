@@ -603,3 +603,112 @@ class TestHandleReSuspend:
         assert "POC email" in result["error"]
 
         await task_manager.stop()
+
+
+class TestSaveResult:
+    """Tests for save_result method."""
+
+    @pytest.mark.asyncio
+    async def test_save_result_completed(self, task_manager, task_store):
+        """Test saving a completed task result."""
+        await task_manager.start()
+
+        await task_manager.save_result(
+            task_id="task-completed-1",
+            status="completed",
+            result={"data": "test_data", "success": True},
+        )
+
+        # Verify result was saved
+        result = await task_store.get_result("task-completed-1")
+        assert result is not None
+        assert result["task_id"] == "task-completed-1"
+        assert result["status"] == "completed"
+        assert result["result"] == {"data": "test_data", "success": True}
+        assert result["error"] is None
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_save_result_failed(self, task_manager, task_store):
+        """Test saving a failed task result."""
+        await task_manager.start()
+
+        await task_manager.save_result(
+            task_id="task-failed-1",
+            status="failed",
+            error="Something went wrong",
+        )
+
+        # Verify result was saved
+        result = await task_store.get_result("task-failed-1")
+        assert result is not None
+        assert result["task_id"] == "task-failed-1"
+        assert result["status"] == "failed"
+        assert result["error"] == "Something went wrong"
+        assert result["result"] is None
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_save_result_appears_in_list(self, task_manager, task_store):
+        """Test saved results appear in list_all_tasks."""
+        await task_manager.start()
+
+        # Save a completed task
+        await task_manager.save_result(
+            task_id="task-list-test-1",
+            status="completed",
+            result={"value": 42},
+        )
+
+        # Save a failed task
+        await task_manager.save_result(
+            task_id="task-list-test-2",
+            status="failed",
+            error="Test error",
+        )
+
+        # List all tasks
+        tasks = await task_manager.list_all_tasks()
+
+        # Find our tasks
+        task_ids = [t.task_id for t in tasks]
+        assert "task-list-test-1" in task_ids
+        assert "task-list-test-2" in task_ids
+
+        # Verify states
+        completed_task = next(t for t in tasks if t.task_id == "task-list-test-1")
+        assert completed_task.state == TaskState.COMPLETED
+
+        failed_task = next(t for t in tasks if t.task_id == "task-list-test-2")
+        assert failed_task.state == TaskState.FAILED
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_save_result_replaces_existing(self, task_manager, task_store):
+        """Test saving result replaces existing result for same task_id."""
+        await task_manager.start()
+
+        # Save initial result
+        await task_manager.save_result(
+            task_id="task-replace-test",
+            status="failed",
+            error="Initial error",
+        )
+
+        # Replace with completed result
+        await task_manager.save_result(
+            task_id="task-replace-test",
+            status="completed",
+            result={"success": True},
+        )
+
+        # Verify updated result
+        result = await task_store.get_result("task-replace-test")
+        assert result["status"] == "completed"
+        assert result["result"] == {"success": True}
+        assert result["error"] is None
+
+        await task_manager.stop()
