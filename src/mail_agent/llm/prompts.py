@@ -243,6 +243,7 @@ Write the email subject and body."""
         headers: list[str],
         max_content_chars: int = 8000,
         email_body_text: str | None = None,
+        conversation_history: str | None = None,
     ) -> str:
         """
         Create prompt for validating POC response.
@@ -255,6 +256,7 @@ Write the email subject and body."""
             headers: Column headers from the attachment.
             max_content_chars: Maximum characters of content to include in prompt.
             email_body_text: The email body text (for redirect detection).
+            conversation_history: Full conversation history from all related POCs.
 
         Returns:
             Formatted prompt string.
@@ -268,10 +270,23 @@ Email body text:
 \"\"\"
 """
 
+        # Include conversation history if available (for multi-POC scenarios with redirects)
+        history_section = ""
+        if conversation_history:
+            history_section = f"""
+IMPORTANT - CONVERSATION CONTEXT:
+The following shows the full conversation history including any previous contacts
+who have already provided partial data. When validating, consider ALL data received
+across the entire conversation chain, not just this current response.
+
+{conversation_history}
+
+"""
+
         return f"""Original request: "{request_description}"
 Success criteria: "{success_criteria}"
-{email_body_section}
-Received response content:
+{history_section}{email_body_section}
+CURRENT response content being validated:
 - Row count: {row_count}
 - Headers/Columns: {', '.join(headers)}
 - Data preview:
@@ -284,12 +299,17 @@ FIRST, check if this is a REDIRECT:
 
 If NOT a redirect, analyze the following:
 1. Does the response contain the requested information?
-2. Is the data complete (correct number of items as requested)?
+2. Is the data complete? IMPORTANT: Consider data from ALL sources in the conversation history.
+   - If previous contacts already provided partial data, add that to what this contact provided.
+   - Example: If success criteria is "10 recipes" and a previous contact already sent 4 recipes
+     (visible in conversation history), and this contact sends 6 more, the total is 10 = VALID.
 3. Is the format correct?
 4. Is the quality acceptable (meaningful data, not placeholders)?
 
-Be strict: if the request asked for 10 items and only 8 are provided, mark as INVALID.
-Provide detailed feedback on what is correct, missing, or wrong."""
+CRITICAL: When checking completeness, SUM UP the items from ALL contacts in the conversation chain.
+Do NOT require this single contact to provide everything if others have already contributed.
+
+Provide detailed feedback on what is correct, missing, or wrong, mentioning all sources of data."""
 
     @staticmethod
     def compose_followup(
@@ -372,12 +392,15 @@ Write the email subject and body."""
         success_criteria: str,
         referrer_email: str,
         redirect_reason: Optional[str] = None,
+        already_received_summary: Optional[str] = None,
+        remaining_items_needed: Optional[int] = None,
     ) -> str:
         """
         Create prompt for composing email to a redirected contact.
 
         This is used when the original POC (referrer_email) has redirected us
-        to a new contact (poc_email). The email should mention the referral.
+        to a new contact (poc_email). The email should mention the referral
+        and adjust the request based on items already received.
 
         Args:
             poc_email: Recipient email address (the redirect target).
@@ -386,6 +409,8 @@ Write the email subject and body."""
             success_criteria: Specific criteria for success.
             referrer_email: Email of the person who redirected us.
             redirect_reason: Optional reason given for the redirect.
+            already_received_summary: Summary of what was already received from previous contacts.
+            remaining_items_needed: Number of items still needed (if applicable).
 
         Returns:
             Formatted prompt string.
@@ -394,24 +419,42 @@ Write the email subject and body."""
         if redirect_reason:
             reason_context = f" They mentioned: \"{redirect_reason}\"."
 
+        # Build context about what has already been received
+        already_received_context = ""
+        adjusted_criteria = success_criteria
+        if already_received_summary or remaining_items_needed:
+            already_received_context = "\n\nIMPORTANT - PARTIAL DATA ALREADY RECEIVED:"
+            if already_received_summary:
+                already_received_context += f"\n{already_received_summary}"
+            if remaining_items_needed is not None and remaining_items_needed > 0:
+                already_received_context += f"""
+\nThe referrer ({referrer_email}) has already provided some items. We now only need
+{remaining_items_needed} more items from {poc_email}.
+
+CRITICAL: Adjust your request to ask for ONLY the remaining {remaining_items_needed} items,
+NOT the full original amount. Make it clear we already have partial data from {referrer_email}."""
+                adjusted_criteria = f"{remaining_items_needed} additional items (partial data already received from {referrer_email})"
+
         return f"""Compose an email to request the following:
 
 Recipient: {poc_email}
 Request: {request_description}
 Expected format: {expected_format}
-Success criteria: {success_criteria}
+Original success criteria: {success_criteria}
+Adjusted criteria for this contact: {adjusted_criteria}
 
 IMPORTANT CONTEXT - This is a REDIRECT:
 - {referrer_email} has redirected me to you for this request.{reason_context}
 - You MUST mention in the opening that {referrer_email} referred you to contact {poc_email}.
 - Example opening: "I was referred to you by {referrer_email} regarding the following request..."
 - Do NOT ask {poc_email} to forward anything back to {referrer_email}.
+{already_received_context}
 
 The email should:
 1. Start by mentioning the referral from {referrer_email}
-2. Clearly state what information/data is needed
-3. Specify the expected format ({expected_format})
-4. Mention the specific criteria ({success_criteria})
+2. Clearly state what information/data is STILL needed (accounting for partial data if any)
+3. If partial data was already received, mention this and ask only for the remaining items
+4. Specify the expected format ({expected_format})
 5. Be concise but complete
 
 Write the email subject and body."""

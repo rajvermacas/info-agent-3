@@ -326,3 +326,104 @@ class TestSystemPrompts:
         """Test FOLLOWUP_SYSTEM prompt content."""
         assert "thank" in PromptTemplates.FOLLOWUP_SYSTEM.lower()
         assert "polite" in PromptTemplates.FOLLOWUP_SYSTEM.lower()
+
+
+class TestConversationHistoryInPrompts:
+    """Tests for conversation history context in prompts."""
+
+    def test_validate_response_with_conversation_history(self):
+        """Test validate_response includes conversation history when provided."""
+        conversation_history = """=== CONVERSATION HISTORY ===
+
+--- Conversation with mrinal@example.com ---
+Status: redirected
+
+[SENT EMAIL #1 to mrinal@example.com]
+Subject: Request for recipes
+Body: Please send 10 recipes
+
+[RECEIVED EMAIL #1 from mrinal@example.com]
+Subject: Re: Request for recipes
+Body: Here are 4 recipes, please contact sunny@gmail.com for the remaining 6
+Attachment content: [{"recipe": "pasta"}, {"recipe": "pizza"}, {"recipe": "salad"}, {"recipe": "soup"}]
+
+[REDIRECTED to sunny@gmail.com]
+
+=== END CONVERSATION HISTORY ==="""
+
+        prompt = PromptTemplates.validate_response(
+            request_description="10 food recipes",
+            success_criteria="10 rows of recipes",
+            extracted_content='[{"recipe": "curry"}, {"recipe": "biryani"}, {"recipe": "dal"}, {"recipe": "rice"}, {"recipe": "naan"}, {"recipe": "paneer"}]',
+            row_count=6,
+            headers=["recipe"],
+            conversation_history=conversation_history,
+        )
+
+        # Should include the conversation history section
+        assert "CONVERSATION HISTORY" in prompt
+        assert "mrinal@example.com" in prompt
+        assert "Here are 4 recipes" in prompt
+        assert "pasta" in prompt
+        # Should include instructions about summing items
+        assert "SUM UP" in prompt or "ALL sources" in prompt
+        # Should include the current response
+        assert "curry" in prompt
+        assert "Row count: 6" in prompt
+
+    def test_validate_response_without_conversation_history(self):
+        """Test validate_response works without conversation history."""
+        prompt = PromptTemplates.validate_response(
+            request_description="10 food recipes",
+            success_criteria="10 rows of recipes",
+            extracted_content='[{"recipe": "pasta"}]',
+            row_count=1,
+            headers=["recipe"],
+            conversation_history=None,
+        )
+
+        # Should not include conversation history section
+        assert "CONVERSATION HISTORY" not in prompt
+        # Should still work normally
+        assert "10 food recipes" in prompt
+        assert "10 rows of recipes" in prompt
+
+    def test_compose_email_for_redirect_with_partial_data(self):
+        """Test compose_email_for_redirect includes partial data context."""
+        prompt = PromptTemplates.compose_email_for_redirect(
+            poc_email="sunny@gmail.com",
+            request_description="Get 10 food recipes",
+            expected_format="csv",
+            success_criteria="10 rows of recipes",
+            referrer_email="mrinal@example.com",
+            redirect_reason="Please contact sunny for the remaining recipes",
+            already_received_summary="From mrinal@example.com: 4 items in attachment",
+            remaining_items_needed=6,
+        )
+
+        # Should include context about partial data
+        assert "PARTIAL DATA ALREADY RECEIVED" in prompt or "already provided" in prompt.lower()
+        assert "6" in prompt  # remaining items
+        assert "mrinal@example.com" in prompt
+        # Should mention adjusting the request
+        assert "ONLY" in prompt or "remaining" in prompt.lower()
+
+    def test_compose_email_for_redirect_without_partial_data(self):
+        """Test compose_email_for_redirect works without partial data."""
+        prompt = PromptTemplates.compose_email_for_redirect(
+            poc_email="sunny@gmail.com",
+            request_description="Get 10 food recipes",
+            expected_format="csv",
+            success_criteria="10 rows of recipes",
+            referrer_email="mrinal@example.com",
+            redirect_reason=None,
+            already_received_summary=None,
+            remaining_items_needed=None,
+        )
+
+        # Should not include partial data context
+        assert "PARTIAL DATA" not in prompt
+        # Should still work normally
+        assert "sunny@gmail.com" in prompt
+        assert "mrinal@example.com" in prompt
+        assert "REDIRECT" in prompt

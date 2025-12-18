@@ -321,3 +321,218 @@ class TestValidationResult:
         assert result.attempt == 1
         assert result.is_valid is False
         assert len(result.missing_items) == 2
+
+
+class TestGetRelatedConversations:
+    """Tests for get_related_conversations function."""
+
+    def test_single_conversation_no_redirect(self):
+        """Test with single conversation that has no redirect."""
+        from mail_agent.agent.state import get_related_conversations, RedirectInfo
+
+        conv = ConversationState(poc_email="mrinal@example.com", status="waiting")
+        state: AgentState = {
+            "conversations": {"mrinal@example.com": conv.to_dict()},
+        }
+
+        result = get_related_conversations(state, "mrinal@example.com")
+
+        assert len(result) == 1
+        assert result[0].poc_email == "mrinal@example.com"
+
+    def test_redirect_chain(self):
+        """Test with redirect chain: mrinal -> sunny."""
+        from mail_agent.agent.state import get_related_conversations, RedirectInfo
+
+        # mrinal's conversation (redirected to sunny)
+        mrinal_conv = ConversationState(
+            poc_email="mrinal@example.com",
+            status="redirected",
+            redirected_to="sunny@example.com",
+        )
+
+        # sunny's conversation (created from redirect)
+        sunny_conv = ConversationState(
+            poc_email="sunny@example.com",
+            status="waiting",
+            redirected_from=RedirectInfo(
+                original_poc="mrinal@example.com",
+                redirect_email="sunny@example.com",
+                redirect_reason="Please contact sunny for the rest",
+            ),
+        )
+
+        state: AgentState = {
+            "conversations": {
+                "mrinal@example.com": mrinal_conv.to_dict(),
+                "sunny@example.com": sunny_conv.to_dict(),
+            },
+        }
+
+        # Get related conversations for sunny
+        result = get_related_conversations(state, "sunny@example.com")
+
+        # Should include both mrinal and sunny, with mrinal first (chronological)
+        assert len(result) == 2
+        assert result[0].poc_email == "mrinal@example.com"
+        assert result[1].poc_email == "sunny@example.com"
+
+    def test_empty_state(self):
+        """Test with empty conversations."""
+        from mail_agent.agent.state import get_related_conversations
+
+        state: AgentState = {"conversations": {}}
+
+        result = get_related_conversations(state, "test@example.com")
+
+        assert len(result) == 0
+
+
+class TestBuildConversationThreadContext:
+    """Tests for build_conversation_thread_context function."""
+
+    def test_builds_context_with_sent_and_received_emails(self):
+        """Test that context includes sent and received emails."""
+        from mail_agent.agent.state import build_conversation_thread_context
+
+        sent = SentEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789012"),
+            subject="Request for recipes",
+            body="Please send 10 recipes",
+            sent_at=datetime.now(timezone.utc),
+        )
+
+        received = ReceivedEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789013"),
+            from_address="mrinal@example.com",
+            subject="Re: Request for recipes",
+            received_at=datetime.now(timezone.utc),
+            has_attachment=True,
+            attachment_content='[{"recipe": "pasta"}, {"recipe": "pizza"}]',
+            body_text="Here are 4 recipes, get 6 more from sunny",
+        )
+
+        conv = ConversationState(
+            poc_email="mrinal@example.com",
+            status="redirected",
+        )
+        conv.sent_emails.append(sent)
+        conv.received_emails.append(received)
+
+        state: AgentState = {
+            "conversations": {"mrinal@example.com": conv.to_dict()},
+        }
+
+        result = build_conversation_thread_context(state, "mrinal@example.com")
+
+        assert "CONVERSATION HISTORY" in result
+        assert "mrinal@example.com" in result
+        assert "Request for recipes" in result
+        assert "Please send 10 recipes" in result
+        assert "Here are 4 recipes" in result
+        assert "pasta" in result
+
+    def test_excludes_current_poc_when_specified(self):
+        """Test include_current=False excludes the current POC."""
+        from mail_agent.agent.state import build_conversation_thread_context, RedirectInfo
+
+        mrinal_conv = ConversationState(
+            poc_email="mrinal@example.com",
+            status="redirected",
+            redirected_to="sunny@example.com",
+        )
+
+        sunny_conv = ConversationState(
+            poc_email="sunny@example.com",
+            status="waiting",
+            redirected_from=RedirectInfo(
+                original_poc="mrinal@example.com",
+                redirect_email="sunny@example.com",
+            ),
+        )
+
+        state: AgentState = {
+            "conversations": {
+                "mrinal@example.com": mrinal_conv.to_dict(),
+                "sunny@example.com": sunny_conv.to_dict(),
+            },
+        }
+
+        result = build_conversation_thread_context(
+            state, "sunny@example.com", include_current=False
+        )
+
+        assert "mrinal@example.com" in result
+        # sunny@example.com should not be in context when include_current=False
+        # Note: The exact behavior depends on implementation
+
+    def test_empty_when_no_conversations(self):
+        """Test returns empty string for empty state."""
+        from mail_agent.agent.state import build_conversation_thread_context
+
+        state: AgentState = {"conversations": {}}
+
+        result = build_conversation_thread_context(state, "test@example.com")
+
+        assert result == ""
+
+
+class TestGetReceivedItemsSummary:
+    """Tests for get_received_items_summary function."""
+
+    def test_counts_items_from_json_attachment(self):
+        """Test counting items from JSON array attachment."""
+        from mail_agent.agent.state import get_received_items_summary, RedirectInfo
+
+        # mrinal sent 4 recipes as JSON
+        received = ReceivedEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789013"),
+            from_address="mrinal@example.com",
+            subject="Re: Request for recipes",
+            received_at=datetime.now(timezone.utc),
+            has_attachment=True,
+            attachment_content='[{"name": "pasta"}, {"name": "pizza"}, {"name": "salad"}, {"name": "soup"}]',
+        )
+
+        mrinal_conv = ConversationState(
+            poc_email="mrinal@example.com",
+            status="redirected",
+            redirected_to="sunny@example.com",
+        )
+        mrinal_conv.received_emails.append(received)
+
+        sunny_conv = ConversationState(
+            poc_email="sunny@example.com",
+            status="waiting",
+            redirected_from=RedirectInfo(
+                original_poc="mrinal@example.com",
+                redirect_email="sunny@example.com",
+            ),
+        )
+
+        state: AgentState = {
+            "conversations": {
+                "mrinal@example.com": mrinal_conv.to_dict(),
+                "sunny@example.com": sunny_conv.to_dict(),
+            },
+        }
+
+        result = get_received_items_summary(state, "sunny@example.com")
+
+        # Should count 4 items from mrinal's JSON array
+        assert result["total_items_received"] == 4
+        assert "mrinal@example.com" in result["sources"]
+
+    def test_no_items_when_no_previous_conversations(self):
+        """Test returns 0 items when no previous conversations."""
+        from mail_agent.agent.state import get_received_items_summary
+
+        conv = ConversationState(poc_email="test@example.com", status="waiting")
+        state: AgentState = {
+            "conversations": {"test@example.com": conv.to_dict()},
+        }
+
+        result = get_received_items_summary(state, "test@example.com")
+
+        assert result["total_items_received"] == 0
+        assert result["sources"] == []

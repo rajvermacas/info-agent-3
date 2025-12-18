@@ -7,12 +7,15 @@ Composes initial request emails and follow-up correction emails.
 import logging
 from typing import Any
 
+import re
+
 from mail_agent.agent.state import (
     AgentState,
     ConversationState,
     RedirectInfo,
     get_conversation,
     get_parsed_request,
+    get_received_items_summary,
     update_conversation,
 )
 from mail_agent.config import get_settings
@@ -109,6 +112,28 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
                     f"(redirected from {conversation.redirected_from.original_poc})"
                 )
 
+                # Get summary of what was already received from previous contacts
+                received_summary = get_received_items_summary(state, current_poc)
+                items_received = received_summary["total_items_received"]
+
+                # Try to parse the original number requested from success criteria
+                # Look for patterns like "10 recipes", "10 rows", "10 items", etc.
+                original_total = None
+                remaining_needed = None
+                criteria_match = re.search(
+                    r'(\d+)\s*(?:rows?|items?|recipes?|entries?|records?)',
+                    parsed_request.success_criteria,
+                    re.IGNORECASE
+                )
+                if criteria_match:
+                    original_total = int(criteria_match.group(1))
+                    remaining_needed = max(0, original_total - items_received)
+                    logger.info(
+                        f"Original request: {original_total} items, "
+                        f"already received: {items_received}, "
+                        f"remaining needed: {remaining_needed}"
+                    )
+
                 prompt = PromptTemplates.compose_email_for_redirect(
                     poc_email=current_poc,
                     request_description=parsed_request.request_description,
@@ -116,6 +141,8 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
                     success_criteria=parsed_request.success_criteria,
                     referrer_email=conversation.redirected_from.original_poc,
                     redirect_reason=conversation.redirected_from.redirect_reason,
+                    already_received_summary=received_summary["items_summary"] if items_received > 0 else None,
+                    remaining_items_needed=remaining_needed,
                 )
             else:
                 # Compose initial email (no redirect)

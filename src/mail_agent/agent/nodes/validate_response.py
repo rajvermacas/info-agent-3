@@ -11,6 +11,7 @@ from typing import Any
 from mail_agent.agent.state import (
     AgentState,
     ValidationResult,
+    build_conversation_thread_context,
     get_conversation,
     get_parsed_request,
     update_conversation,
@@ -69,15 +70,22 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
         settings = get_settings()
         llm_client = LLMClient(settings)
 
+        # Build conversation history for multi-POC scenarios (redirects)
+        # This includes all emails and data from related conversations
+        conversation_history = build_conversation_thread_context(
+            state, current_poc, include_current=True
+        )
+
         logger.info(
             f"Validating: content_length={len(extracted_content)}, "
             f"max_chars={settings.validation_content_max_chars}, "
             f"truncated={len(extracted_content) > settings.validation_content_max_chars}, "
             f"headers={headers}, row_count={row_count}, "
-            f"body_text_length={len(email_body_text)}"
+            f"body_text_length={len(email_body_text)}, "
+            f"conversation_history_length={len(conversation_history)}"
         )
 
-        # Generate validation prompt
+        # Generate validation prompt with full conversation context
         prompt = PromptTemplates.validate_response(
             request_description=parsed_request.request_description,
             success_criteria=parsed_request.success_criteria,
@@ -86,6 +94,7 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
             headers=headers,
             max_content_chars=settings.validation_content_max_chars,
             email_body_text=email_body_text,
+            conversation_history=conversation_history if conversation_history else None,
         )
 
         # Call LLM for validation

@@ -446,3 +446,198 @@ def get_active_poc(state: AgentState) -> Optional[str]:
             return poc_email
 
     return None
+
+
+def get_related_conversations(
+    state: AgentState,
+    poc_email: str
+) -> list[ConversationState]:
+    """
+    Get all conversations related to a POC through redirects.
+
+    This traces back through redirect chains to find all conversations
+    that contributed to the current request (e.g., if A redirected to B,
+    and B redirected to C, get all three conversations when processing C).
+
+    Args:
+        state: Current agent state.
+        poc_email: The POC email to find related conversations for.
+
+    Returns:
+        List of ConversationState objects in chronological order (oldest first).
+    """
+    conversations = state.get("conversations", {})
+    related = []
+    visited = set()
+
+    # First, trace back to find the original conversation (follow redirected_from chain)
+    current_email = poc_email
+    chain = []
+
+    while current_email and current_email not in visited:
+        visited.add(current_email)
+        conv_dict = conversations.get(current_email)
+        if not conv_dict:
+            break
+
+        conv = ConversationState.from_dict(conv_dict)
+        chain.append(conv)
+
+        # Check if this conversation was created from a redirect
+        if conv.redirected_from:
+            current_email = conv.redirected_from.original_poc
+        else:
+            break
+
+    # Reverse to get chronological order (original first)
+    related = list(reversed(chain))
+
+    return related
+
+
+def build_conversation_thread_context(
+    state: AgentState,
+    poc_email: str,
+    include_current: bool = True,
+) -> str:
+    """
+    Build a formatted context string summarizing all related conversations.
+
+    This creates a text summary of all emails sent and received in the
+    conversation chain, including any partial results received from
+    previous contacts who redirected.
+
+    Args:
+        state: Current agent state.
+        poc_email: The current POC email.
+        include_current: Whether to include the current POC's conversation.
+
+    Returns:
+        Formatted string with conversation history.
+    """
+    related = get_related_conversations(state, poc_email)
+
+    if not related:
+        return ""
+
+    # If not including current, remove the last one (which is the current POC)
+    if not include_current and related:
+        # Find and remove the current POC's conversation
+        related = [c for c in related if c.poc_email != poc_email]
+
+    if not related:
+        return ""
+
+    context_parts = []
+    context_parts.append("=== CONVERSATION HISTORY ===")
+
+    for conv in related:
+        context_parts.append(f"\n--- Conversation with {conv.poc_email} ---")
+        context_parts.append(f"Status: {conv.status}")
+
+        # Include sent emails
+        for i, sent in enumerate(conv.sent_emails, 1):
+            context_parts.append(f"\n[SENT EMAIL #{i} to {conv.poc_email}]")
+            context_parts.append(f"Subject: {sent.subject}")
+            context_parts.append(f"Body:\n{sent.body[:1000]}{'...' if len(sent.body) > 1000 else ''}")
+
+        # Include received emails with their content
+        for i, received in enumerate(conv.received_emails, 1):
+            context_parts.append(f"\n[RECEIVED EMAIL #{i} from {conv.poc_email}]")
+            context_parts.append(f"Subject: {received.subject}")
+            if received.body_text:
+                body_preview = received.body_text[:1000]
+                context_parts.append(f"Body:\n{body_preview}{'...' if len(received.body_text) > 1000 else ''}")
+            if received.attachment_content:
+                # Include attachment content (this is where partial data would be)
+                content_preview = received.attachment_content[:3000]
+                context_parts.append(f"Attachment content:\n{content_preview}{'...' if len(received.attachment_content) > 3000 else ''}")
+
+        # Include validation results
+        for i, validation in enumerate(conv.validation_results, 1):
+            context_parts.append(f"\n[VALIDATION #{i}]")
+            context_parts.append(f"Valid: {validation.is_valid}")
+            context_parts.append(f"Feedback: {validation.feedback}")
+            if validation.missing_items:
+                context_parts.append(f"Missing items: {', '.join(validation.missing_items)}")
+
+        # Note if this conversation redirected
+        if conv.redirected_to:
+            context_parts.append(f"\n[REDIRECTED to {conv.redirected_to}]")
+
+    context_parts.append("\n=== END CONVERSATION HISTORY ===")
+
+    return "\n".join(context_parts)
+
+
+def get_received_items_summary(state: AgentState, poc_email: str) -> dict:
+    """
+    Calculate what has already been received from related conversations.
+
+    This is used to adjust the request when contacting a redirected POC,
+    so we ask only for the remaining items needed.
+
+    Args:
+        state: Current agent state.
+        poc_email: The current POC email (typically a redirect target).
+
+    Returns:
+        Dictionary with:
+        - total_items_received: Number of items already received
+        - items_summary: Text summary of what was received
+        - sources: List of POCs who provided items
+    """
+    related = get_related_conversations(state, poc_email)
+
+    # Exclude the current POC (we want items from others)
+    previous_convs = [c for c in related if c.poc_email != poc_email]
+
+    result = {
+        "total_items_received": 0,
+        "items_summary": "",
+        "sources": [],
+    }
+
+    summaries = []
+
+    for conv in previous_convs:
+        # Check validation results for item counts
+        for validation in conv.validation_results:
+            if validation.feedback:
+                summaries.append(f"From {conv.poc_email}: {validation.feedback}")
+                if conv.poc_email not in result["sources"]:
+                    result["sources"].append(conv.poc_email)
+
+        # Check received emails for content
+        for received in conv.received_emails:
+            if received.attachment_content:
+                # Track this source
+                if conv.poc_email not in result["sources"]:
+                    result["sources"].append(conv.poc_email)
+
+                # Try to count items in the attachment
+                content = received.attachment_content
+                # Simple heuristic: count data rows (lines that look like data)
+                try:
+                    import json
+                    data = json.loads(content)
+                    if isinstance(data, list):
+                        result["total_items_received"] += len(data)
+                        summaries.append(
+                            f"From {conv.poc_email}: {len(data)} items in attachment"
+                        )
+                except (json.JSONDecodeError, TypeError):
+                    # If not JSON, try counting lines (excluding empty/header lines)
+                    lines = [l for l in content.strip().split('\n') if l.strip()]
+                    if lines:
+                        # Rough estimate: assume first line is header
+                        item_count = max(0, len(lines) - 1)
+                        result["total_items_received"] += item_count
+                        if item_count > 0:
+                            summaries.append(
+                                f"From {conv.poc_email}: {item_count} items in attachment"
+                            )
+
+    result["items_summary"] = "; ".join(summaries) if summaries else ""
+
+    return result
