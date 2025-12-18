@@ -19,4 +19,38 @@ Issues:
 
 Expectation:
 1. As soon as the mail is sent from info-agent to raj and neha, the task should appear on the task dashboard
+---------------------------
 
+Scneario:
+1. instruction - Send mail to raj@gmail.com and neha@gmail.com asking 10 food recipes in CSV file
+2. info-agent sends mail to raj and neha
+3. I go to dashboard and i can see a task in suspended state
+4. Neha replies to info-agent
+5. I go to dashboard and see the task in suspended state
+6. Raj replies to info-agent
+7. I go to dashboard and see no visible tasks on the screen
+8. I wait for sometime and then I see the task with completed status
+
+Issue:
+While the validation runs and in the meantime I go to the task dashboard then I see no tasks. It means inflight validation tasks are not visible. Once the validation completes I can again start to see the tasks on the dashboard.
+
+Expectation:
+Once a request is sent to the mail agent. No matter what I should be able to see the task on the dashboard always
+-------------------------
+
+Scneario:
+1. instruction - Send mail to raj@gmail.com and neha@gmail.com asking 10 food recipes in CSV file
+2. info-agent sends mail to raj and neha
+3. I go to dashboard and i can see a task in suspended state with agent activities
+4. Neha replies to info-agent
+5. I go to dashboard and see the task in suspended state with the same agent actiivities whereas the expectation is to see one more info stating that neha@gmail.com has replied
+6. Raj replies to info-agent
+7. I go to dashboard and see the completed task without the agent activities.
+
+Issue:
+Agent activity doesn't get updated after reply
+
+Expectation:
+Reply from either of the POCs should be tracked along with if there are validation failures so those also need to be updated and tracked with a summary of what failed exactly.
+And in the completed state the json dump is fine in the result but it should also show all the agentic steps that were performed from the parsing of instrcutions till the successful response of information which is currently missing from the dashboard task.
+----------------------------------

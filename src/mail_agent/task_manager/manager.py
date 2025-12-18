@@ -113,6 +113,10 @@ class TaskManager:
         self._poc_to_task: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
+        # In-memory tracking for tasks actively resuming (visibility during processing)
+        # Maps task_id -> {task_id, thread_id, started_at, poc_emails, state}
+        self._resuming_tasks: dict[str, dict[str, Any]] = {}
+
         # Background cleanup task
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
@@ -411,10 +415,22 @@ class TaskManager:
             await self._handle_expired_task(task_id, sender)
             return False
 
-        # Remove from suspended state before resuming
+        # Remove from suspended state and add to resuming tasks for visibility
         async with self._lock:
             if sender in self._poc_to_task:
                 del self._poc_to_task[sender]
+
+            # Track as resuming task for visibility during processing
+            self._resuming_tasks[task_id] = {
+                "task_id": task_id,
+                "thread_id": task_info["thread_id"],
+                "started_at": datetime.now(timezone.utc),
+                "poc_emails": [task_info["poc_email"]],
+                "state": "resuming",
+            }
+            logger.debug(
+                f"Task {task_id} added to resuming tasks for visibility during processing"
+            )
 
         await self._task_store.remove_suspended_task(task_id)
 
@@ -493,12 +509,25 @@ class TaskManager:
         # Get all collected webhooks
         all_webhooks = await self._task_store.get_all_webhooks_for_task(task_id)
 
-        # Remove from in-memory mapping
+        # Remove from in-memory POC mapping and add to resuming tasks
+        # This ensures task visibility during processing
         async with self._lock:
             for poc_email in task_info["poc_emails"]:
                 poc_lower = poc_email.lower()
                 if poc_lower in self._poc_to_task:
                     del self._poc_to_task[poc_lower]
+
+            # Track as resuming task for visibility during processing
+            self._resuming_tasks[task_id] = {
+                "task_id": task_id,
+                "thread_id": task_info["thread_id"],
+                "started_at": datetime.now(timezone.utc),
+                "poc_emails": task_info["poc_emails"],
+                "state": "resuming",
+            }
+            logger.debug(
+                f"Task {task_id} added to resuming tasks for visibility during processing"
+            )
 
         # Remove from database
         await self._task_store.remove_suspended_task_multi_poc(task_id)
@@ -551,6 +580,13 @@ class TaskManager:
                     # Check for another interrupt (retry scenario)
                     if self._is_interrupt_event(event):
                         logger.info(f"Task {task_id} interrupted again (retry)")
+                        # Remove from resuming tasks since it's going back to suspended
+                        async with self._lock:
+                            self._resuming_tasks.pop(task_id, None)
+                            logger.debug(
+                                f"Task {task_id} removed from resuming tasks "
+                                "(re-suspended for retry)"
+                            )
                         await self._handle_re_suspend(task_id, event, thread_id)
                         return
 
@@ -578,6 +614,11 @@ class TaskManager:
                 )
                 logger.error(f"Task {task_id} completed without final state")
 
+            # Remove from resuming tasks after result is saved
+            async with self._lock:
+                self._resuming_tasks.pop(task_id, None)
+                logger.debug(f"Task {task_id} removed from resuming tasks")
+
         except Exception as e:
             logger.exception(f"Task {task_id} failed during resume: {e}")
             await self._task_store.save_result(
@@ -585,6 +626,10 @@ class TaskManager:
                 status="failed",
                 error=str(e),
             )
+            # Remove from resuming tasks even on error
+            async with self._lock:
+                self._resuming_tasks.pop(task_id, None)
+                logger.debug(f"Task {task_id} removed from resuming tasks after error")
 
     def _is_interrupt_event(self, event: dict[str, Any]) -> bool:
         """Check if an event indicates an interrupt."""
@@ -742,6 +787,13 @@ class TaskManager:
                         logger.info(
                             f"Multi-POC task {task_id} interrupted again (retry)"
                         )
+                        # Remove from resuming tasks since it's going back to suspended
+                        async with self._lock:
+                            self._resuming_tasks.pop(task_id, None)
+                            logger.debug(
+                                f"Task {task_id} removed from resuming tasks "
+                                "(re-suspended for retry)"
+                            )
                         await self._handle_re_suspend_multi_poc(
                             task_id, event, thread_id
                         )
@@ -773,6 +825,11 @@ class TaskManager:
                 )
                 logger.error(f"Multi-POC task {task_id} completed without final state")
 
+            # Remove from resuming tasks after result is saved
+            async with self._lock:
+                self._resuming_tasks.pop(task_id, None)
+                logger.debug(f"Task {task_id} removed from resuming tasks")
+
         except Exception as e:
             logger.exception(f"Multi-POC task {task_id} failed during resume: {e}")
             await self._task_store.save_result(
@@ -780,6 +837,10 @@ class TaskManager:
                 status="failed",
                 error=str(e),
             )
+            # Remove from resuming tasks even on error
+            async with self._lock:
+                self._resuming_tasks.pop(task_id, None)
+                logger.debug(f"Task {task_id} removed from resuming tasks after error")
 
     async def _handle_re_suspend_multi_poc(
         self,
@@ -906,6 +967,19 @@ class TaskManager:
                 expires_at=expires_at,
             )
 
+        # Check resuming tasks (in-flight processing after webhooks received)
+        async with self._lock:
+            if task_id in self._resuming_tasks:
+                info = self._resuming_tasks[task_id]
+                poc_count = len(info["poc_emails"])
+                return TaskStatus(
+                    task_id=task_id,
+                    state=TaskState.WORKING,
+                    message=f"Processing replies from {poc_count} POC(s)",
+                    poc_email=", ".join(info["poc_emails"]),
+                    created_at=info["started_at"],
+                )
+
         # Check results
         result = await self._task_store.get_result(task_id)
         if result:
@@ -981,6 +1055,49 @@ class TaskManager:
                 created_at=created_at,
                 expires_at=expires_at,
             ))
+
+        # Get multi-POC suspended tasks (parallel processing mode)
+        suspended_multi = await self._task_store.get_all_suspended_tasks_multi_poc()
+        logger.debug(f"Found {len(suspended_multi)} multi-POC suspended tasks")
+        for task in suspended_multi:
+            created_at = datetime.fromisoformat(task["created_at"])
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+
+            expires_at = datetime.fromisoformat(task["expires_at"])
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+            # Calculate progress: how many POCs have replied vs total
+            poc_emails = task["poc_emails"]
+            pending_pocs = task["pending_pocs"]
+            received_count = len(poc_emails) - len(pending_pocs)
+            total_count = len(poc_emails)
+
+            # Build informative message showing progress
+            message = f"Waiting for replies: {received_count}/{total_count} received"
+
+            tasks.append(TaskStatus(
+                task_id=task["task_id"],
+                state=TaskState.SUSPENDED,
+                message=message,
+                poc_email=", ".join(poc_emails),
+                created_at=created_at,
+                expires_at=expires_at,
+            ))
+
+        # Get resuming tasks (in-flight processing after webhooks received)
+        async with self._lock:
+            for task_id, info in self._resuming_tasks.items():
+                poc_count = len(info["poc_emails"])
+                tasks.append(TaskStatus(
+                    task_id=task_id,
+                    state=TaskState.WORKING,
+                    message=f"Processing replies from {poc_count} POC(s)",
+                    poc_email=", ".join(info["poc_emails"]),
+                    created_at=info["started_at"],
+                ))
+        logger.debug(f"Found {len(self._resuming_tasks)} resuming tasks")
 
         # Get completed/failed tasks
         results = await self._task_store.get_all_task_results()
