@@ -136,7 +136,9 @@ def create_app() -> FastAPI:
     app.include_router(pages_router)
     app.include_router(send_request_router, prefix="/api")
     app.include_router(inbox_router, prefix="/api")
-    app.include_router(dashboard_router, prefix="/api")
+    # Dashboard router already has /dashboard prefix, no /api prefix needed
+    # Templates use /dashboard/... paths for HTMX requests
+    app.include_router(dashboard_router)
 
     # Create SSE client and router during app creation (not in lifespan)
     # This ensures routes are registered BEFORE the app starts

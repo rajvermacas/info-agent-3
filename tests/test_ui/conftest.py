@@ -9,7 +9,13 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from ui.config import Settings
-from ui.services.a2a_client import A2AClientService, TaskInfo, AgentInfo
+from ui.services.a2a_client import (
+    A2AClientService,
+    TaskInfo,
+    AgentInfo,
+    TaskActivity,
+    ActivityEvent,
+)
 from ui.services.smtp_client import (
     SMTPClientService,
     InboxSummary,
@@ -79,6 +85,23 @@ def mock_a2a_client() -> AsyncMock:
             ),
         ]
     )
+    # Mock get_task_activity with default empty response
+    client.get_task_activity = AsyncMock(
+        return_value=TaskActivity(
+            task_id="test-task-123",
+            events=[
+                ActivityEvent(
+                    event_id=1,
+                    task_id="test-task-123",
+                    state="working",
+                    message="Starting task execution",
+                    timestamp="2025-12-18T10:00:00",
+                    node="start",
+                ),
+            ],
+            event_count=1,
+        )
+    )
     return client
 
 
@@ -144,15 +167,41 @@ def mock_smtp_client() -> AsyncMock:
 
 
 @pytest.fixture
+def mock_smtp_sender() -> AsyncMock:
+    """Create a mock SMTP sender service."""
+    from ui.services.smtp_sender import SMTPSenderService
+
+    sender = AsyncMock(spec=SMTPSenderService)
+    sender.send_email = AsyncMock(return_value=True)
+    return sender
+
+
+@pytest.fixture
+def mock_sse_client() -> AsyncMock:
+    """Create a mock SSE client service."""
+    from ui.services.sse_client import SSEClientService
+
+    client = AsyncMock(spec=SSEClientService)
+    return client
+
+
+@pytest.fixture
 def test_client(
     settings: Settings,
     mock_a2a_client: AsyncMock,
     mock_smtp_client: AsyncMock,
+    mock_smtp_sender: AsyncMock,
+    mock_sse_client: AsyncMock,
 ) -> TestClient:
     """Create a test client with mocked dependencies."""
-    import jinja2
     from starlette.templating import Jinja2Templates
     from pathlib import Path
+
+    try:
+        import jinja2
+    except ImportError:
+        pytest.skip("jinja2 not available")
+
     from ui.main import UIServerResources
 
     # Create templates
@@ -170,6 +219,8 @@ def test_client(
         settings=settings,
         a2a_client=mock_a2a_client,
         smtp_client=mock_smtp_client,
+        smtp_sender=mock_smtp_sender,
+        sse_client=mock_sse_client,
         templates=templates,
     )
 
