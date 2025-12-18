@@ -26,6 +26,25 @@ class SentEmail:
     body: str
     sent_at: datetime
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "email_id": str(self.email_id),
+            "subject": self.subject,
+            "body": self.body,
+            "sent_at": self.sent_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SentEmail":
+        """Create from dictionary."""
+        return cls(
+            email_id=UUID(data["email_id"]),
+            subject=data["subject"],
+            body=data["body"],
+            sent_at=datetime.fromisoformat(data["sent_at"]),
+        )
+
 
 @dataclass
 class ReceivedEmail:
@@ -40,6 +59,33 @@ class ReceivedEmail:
     attachment_filename: Optional[str] = None
     body_text: Optional[str] = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "email_id": str(self.email_id),
+            "from_address": self.from_address,
+            "subject": self.subject,
+            "received_at": self.received_at.isoformat(),
+            "has_attachment": self.has_attachment,
+            "attachment_content": self.attachment_content,
+            "attachment_filename": self.attachment_filename,
+            "body_text": self.body_text,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReceivedEmail":
+        """Create from dictionary."""
+        return cls(
+            email_id=UUID(data["email_id"]),
+            from_address=data["from_address"],
+            subject=data["subject"],
+            received_at=datetime.fromisoformat(data["received_at"]),
+            has_attachment=data["has_attachment"],
+            attachment_content=data.get("attachment_content"),
+            attachment_filename=data.get("attachment_filename"),
+            body_text=data.get("body_text"),
+        )
+
 
 @dataclass
 class ValidationResult:
@@ -50,6 +96,25 @@ class ValidationResult:
     feedback: str
     missing_items: list[str] = field(default_factory=list)
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "attempt": self.attempt,
+            "is_valid": self.is_valid,
+            "feedback": self.feedback,
+            "missing_items": self.missing_items,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ValidationResult":
+        """Create from dictionary."""
+        return cls(
+            attempt=data["attempt"],
+            is_valid=data["is_valid"],
+            feedback=data["feedback"],
+            missing_items=data.get("missing_items", []),
+        )
+
 
 @dataclass
 class RedirectInfo:
@@ -59,6 +124,31 @@ class RedirectInfo:
     redirect_email: str
     redirect_reason: Optional[str] = None
     redirected_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "original_poc": self.original_poc,
+            "redirect_email": self.redirect_email,
+            "redirect_reason": self.redirect_reason,
+            "redirected_at": (
+                self.redirected_at.isoformat() if self.redirected_at else None
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RedirectInfo":
+        """Create from dictionary."""
+        return cls(
+            original_poc=data["original_poc"],
+            redirect_email=data["redirect_email"],
+            redirect_reason=data.get("redirect_reason"),
+            redirected_at=(
+                datetime.fromisoformat(data["redirected_at"])
+                if data.get("redirected_at")
+                else None
+            ),
+        )
 
 
 @dataclass

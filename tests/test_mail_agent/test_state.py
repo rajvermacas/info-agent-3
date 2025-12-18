@@ -11,6 +11,7 @@ from mail_agent.agent.state import (
     ConversationState,
     ParsedRequest,
     ReceivedEmail,
+    RedirectInfo,
     SentEmail,
     ValidationResult,
     create_initial_state,
@@ -285,6 +286,56 @@ class TestSentEmail:
         assert sent.subject == "Test Subject"
         assert sent.body == "Test Body"
 
+    def test_to_dict(self):
+        """Test SentEmail to_dict method."""
+        sent_at = datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        sent = SentEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789012"),
+            subject="Test Subject",
+            body="Test Body",
+            sent_at=sent_at,
+        )
+
+        result = sent.to_dict()
+
+        assert result["email_id"] == "12345678-1234-1234-1234-123456789012"
+        assert result["subject"] == "Test Subject"
+        assert result["body"] == "Test Body"
+        assert result["sent_at"] == "2025-01-15T10:30:00+00:00"
+
+    def test_from_dict(self):
+        """Test SentEmail from_dict method."""
+        data = {
+            "email_id": "12345678-1234-1234-1234-123456789012",
+            "subject": "Test Subject",
+            "body": "Test Body",
+            "sent_at": "2025-01-15T10:30:00+00:00",
+        }
+
+        sent = SentEmail.from_dict(data)
+
+        assert sent.email_id == UUID("12345678-1234-1234-1234-123456789012")
+        assert sent.subject == "Test Subject"
+        assert sent.body == "Test Body"
+        assert sent.sent_at == datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    def test_roundtrip_serialization(self):
+        """Test SentEmail to_dict -> from_dict roundtrip."""
+        original = SentEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789012"),
+            subject="Test Subject",
+            body="Test Body",
+            sent_at=datetime.now(timezone.utc),
+        )
+
+        data = original.to_dict()
+        restored = SentEmail.from_dict(data)
+
+        assert restored.email_id == original.email_id
+        assert restored.subject == original.subject
+        assert restored.body == original.body
+        assert restored.sent_at == original.sent_at
+
 
 class TestReceivedEmail:
     """Tests for ReceivedEmail dataclass."""
@@ -305,6 +356,112 @@ class TestReceivedEmail:
         assert received.has_attachment is True
         assert received.attachment_filename == "data.xlsx"
 
+    def test_to_dict(self):
+        """Test ReceivedEmail to_dict method."""
+        received_at = datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        received = ReceivedEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789012"),
+            from_address="sender@test.com",
+            subject="Re: Test",
+            received_at=received_at,
+            has_attachment=True,
+            attachment_content='{"data": []}',
+            attachment_filename="data.xlsx",
+            body_text="Email body text",
+        )
+
+        result = received.to_dict()
+
+        assert result["email_id"] == "12345678-1234-1234-1234-123456789012"
+        assert result["from_address"] == "sender@test.com"
+        assert result["subject"] == "Re: Test"
+        assert result["received_at"] == "2025-01-15T10:30:00+00:00"
+        assert result["has_attachment"] is True
+        assert result["attachment_content"] == '{"data": []}'
+        assert result["attachment_filename"] == "data.xlsx"
+        assert result["body_text"] == "Email body text"
+
+    def test_to_dict_optional_fields_none(self):
+        """Test ReceivedEmail to_dict with None optional fields."""
+        received = ReceivedEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789012"),
+            from_address="sender@test.com",
+            subject="Re: Test",
+            received_at=datetime.now(timezone.utc),
+            has_attachment=False,
+        )
+
+        result = received.to_dict()
+
+        assert result["attachment_content"] is None
+        assert result["attachment_filename"] is None
+        assert result["body_text"] is None
+
+    def test_from_dict(self):
+        """Test ReceivedEmail from_dict method."""
+        data = {
+            "email_id": "12345678-1234-1234-1234-123456789012",
+            "from_address": "sender@test.com",
+            "subject": "Re: Test",
+            "received_at": "2025-01-15T10:30:00+00:00",
+            "has_attachment": True,
+            "attachment_content": '{"data": []}',
+            "attachment_filename": "data.xlsx",
+            "body_text": "Email body text",
+        }
+
+        received = ReceivedEmail.from_dict(data)
+
+        assert received.email_id == UUID("12345678-1234-1234-1234-123456789012")
+        assert received.from_address == "sender@test.com"
+        assert received.subject == "Re: Test"
+        assert received.received_at == datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        assert received.has_attachment is True
+        assert received.attachment_content == '{"data": []}'
+        assert received.attachment_filename == "data.xlsx"
+        assert received.body_text == "Email body text"
+
+    def test_from_dict_missing_optional_fields(self):
+        """Test ReceivedEmail from_dict with missing optional fields."""
+        data = {
+            "email_id": "12345678-1234-1234-1234-123456789012",
+            "from_address": "sender@test.com",
+            "subject": "Re: Test",
+            "received_at": "2025-01-15T10:30:00+00:00",
+            "has_attachment": False,
+        }
+
+        received = ReceivedEmail.from_dict(data)
+
+        assert received.attachment_content is None
+        assert received.attachment_filename is None
+        assert received.body_text is None
+
+    def test_roundtrip_serialization(self):
+        """Test ReceivedEmail to_dict -> from_dict roundtrip."""
+        original = ReceivedEmail(
+            email_id=UUID("12345678-1234-1234-1234-123456789012"),
+            from_address="sender@test.com",
+            subject="Re: Test",
+            received_at=datetime.now(timezone.utc),
+            has_attachment=True,
+            attachment_content='{"data": [1, 2, 3]}',
+            attachment_filename="data.csv",
+            body_text="Body text here",
+        )
+
+        data = original.to_dict()
+        restored = ReceivedEmail.from_dict(data)
+
+        assert restored.email_id == original.email_id
+        assert restored.from_address == original.from_address
+        assert restored.subject == original.subject
+        assert restored.received_at == original.received_at
+        assert restored.has_attachment == original.has_attachment
+        assert restored.attachment_content == original.attachment_content
+        assert restored.attachment_filename == original.attachment_filename
+        assert restored.body_text == original.body_text
+
 
 class TestValidationResult:
     """Tests for ValidationResult dataclass."""
@@ -321,3 +478,155 @@ class TestValidationResult:
         assert result.attempt == 1
         assert result.is_valid is False
         assert len(result.missing_items) == 2
+
+    def test_to_dict(self):
+        """Test ValidationResult to_dict method."""
+        result = ValidationResult(
+            attempt=2,
+            is_valid=True,
+            feedback="All items received",
+            missing_items=[],
+        )
+
+        data = result.to_dict()
+
+        assert data["attempt"] == 2
+        assert data["is_valid"] is True
+        assert data["feedback"] == "All items received"
+        assert data["missing_items"] == []
+
+    def test_from_dict(self):
+        """Test ValidationResult from_dict method."""
+        data = {
+            "attempt": 3,
+            "is_valid": False,
+            "feedback": "Missing items",
+            "missing_items": ["item1", "item2"],
+        }
+
+        result = ValidationResult.from_dict(data)
+
+        assert result.attempt == 3
+        assert result.is_valid is False
+        assert result.feedback == "Missing items"
+        assert result.missing_items == ["item1", "item2"]
+
+    def test_from_dict_missing_items_default(self):
+        """Test ValidationResult from_dict with missing missing_items field."""
+        data = {
+            "attempt": 1,
+            "is_valid": True,
+            "feedback": "OK",
+        }
+
+        result = ValidationResult.from_dict(data)
+
+        assert result.missing_items == []
+
+    def test_roundtrip_serialization(self):
+        """Test ValidationResult to_dict -> from_dict roundtrip."""
+        original = ValidationResult(
+            attempt=5,
+            is_valid=False,
+            feedback="Incomplete data",
+            missing_items=["field1", "field2", "field3"],
+        )
+
+        data = original.to_dict()
+        restored = ValidationResult.from_dict(data)
+
+        assert restored.attempt == original.attempt
+        assert restored.is_valid == original.is_valid
+        assert restored.feedback == original.feedback
+        assert restored.missing_items == original.missing_items
+
+
+class TestRedirectInfo:
+    """Tests for RedirectInfo dataclass."""
+
+    def test_creation(self):
+        """Test RedirectInfo creation."""
+        redirect = RedirectInfo(
+            original_poc="original@test.com",
+            redirect_email="new@test.com",
+            redirect_reason="Department change",
+            redirected_at=datetime.now(timezone.utc),
+        )
+
+        assert redirect.original_poc == "original@test.com"
+        assert redirect.redirect_email == "new@test.com"
+        assert redirect.redirect_reason == "Department change"
+
+    def test_to_dict(self):
+        """Test RedirectInfo to_dict method."""
+        redirected_at = datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+        redirect = RedirectInfo(
+            original_poc="original@test.com",
+            redirect_email="new@test.com",
+            redirect_reason="Department change",
+            redirected_at=redirected_at,
+        )
+
+        data = redirect.to_dict()
+
+        assert data["original_poc"] == "original@test.com"
+        assert data["redirect_email"] == "new@test.com"
+        assert data["redirect_reason"] == "Department change"
+        assert data["redirected_at"] == "2025-01-15T10:30:00+00:00"
+
+    def test_to_dict_optional_fields_none(self):
+        """Test RedirectInfo to_dict with None optional fields."""
+        redirect = RedirectInfo(
+            original_poc="original@test.com",
+            redirect_email="new@test.com",
+        )
+
+        data = redirect.to_dict()
+
+        assert data["redirect_reason"] is None
+        assert data["redirected_at"] is None
+
+    def test_from_dict(self):
+        """Test RedirectInfo from_dict method."""
+        data = {
+            "original_poc": "original@test.com",
+            "redirect_email": "new@test.com",
+            "redirect_reason": "Department change",
+            "redirected_at": "2025-01-15T10:30:00+00:00",
+        }
+
+        redirect = RedirectInfo.from_dict(data)
+
+        assert redirect.original_poc == "original@test.com"
+        assert redirect.redirect_email == "new@test.com"
+        assert redirect.redirect_reason == "Department change"
+        assert redirect.redirected_at == datetime(2025, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    def test_from_dict_missing_optional_fields(self):
+        """Test RedirectInfo from_dict with missing optional fields."""
+        data = {
+            "original_poc": "original@test.com",
+            "redirect_email": "new@test.com",
+        }
+
+        redirect = RedirectInfo.from_dict(data)
+
+        assert redirect.redirect_reason is None
+        assert redirect.redirected_at is None
+
+    def test_roundtrip_serialization(self):
+        """Test RedirectInfo to_dict -> from_dict roundtrip."""
+        original = RedirectInfo(
+            original_poc="original@test.com",
+            redirect_email="new@test.com",
+            redirect_reason="Department change",
+            redirected_at=datetime.now(timezone.utc),
+        )
+
+        data = original.to_dict()
+        restored = RedirectInfo.from_dict(data)
+
+        assert restored.original_poc == original.original_poc
+        assert restored.redirect_email == original.redirect_email
+        assert restored.redirect_reason == original.redirect_reason
+        assert restored.redirected_at == original.redirected_at
