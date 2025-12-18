@@ -1038,7 +1038,8 @@ class TestMultiPocResumeData:
         """Test that resume data includes all collected webhooks."""
         await task_manager.start()
 
-        poc_emails = ["poc1@example.com", "poc2@example.com"]
+        # Use 3 POCs so we can receive 2 webhooks without triggering resume
+        poc_emails = ["poc1@example.com", "poc2@example.com", "poc3@example.com"]
 
         await task_manager.suspend_task_multi_poc(
             task_id="multi-data-task",
@@ -1046,8 +1047,8 @@ class TestMultiPocResumeData:
             thread_id="thread-data",
         )
 
-        # Receive webhooks
-        for i, poc in enumerate(poc_emails):
+        # Receive webhooks from first 2 POCs (task stays suspended waiting for poc3)
+        for i, poc in enumerate(poc_emails[:2]):
             payload = WebhookPayload(
                 event="email.received",
                 email_id=f"email-data-{i}",
@@ -1060,7 +1061,7 @@ class TestMultiPocResumeData:
             )
             await task_manager.handle_webhook(payload)
 
-        # Check all webhooks are stored
+        # Check webhooks are stored (task still suspended, waiting for poc3)
         webhooks = await task_store.get_all_webhooks_for_task("multi-data-task")
         assert len(webhooks) == 2
         assert "poc1@example.com" in webhooks
@@ -1075,7 +1076,8 @@ class TestMultiPocCleanup:
     @pytest.mark.asyncio
     async def test_expired_multi_poc_task_cleanup(self, task_manager, task_store, mock_settings):
         """Test that expired multi-POC tasks are cleaned up."""
-        # Set very short expiration for testing
+        # Set very short expiration for testing - MUST be set before start()
+        # because _cleanup_loop reads interval at startup
         mock_settings.task_suspend_timeout_seconds = 1
         mock_settings.expired_task_cleanup_interval_seconds = 1
 
@@ -1089,8 +1091,9 @@ class TestMultiPocCleanup:
             thread_id="thread-expire",
         )
 
-        # Wait for expiration and cleanup
-        await asyncio.sleep(2.5)
+        # Wait for expiration and cleanup (1s timeout + 1s interval + generous buffer)
+        # The cleanup loop checks every 1s, task expires after 1s, so ~3-4s should be enough
+        await asyncio.sleep(4.0)
 
         # Task should be expired and cleaned up
         task = await task_store.get_suspended_task_multi_poc("multi-expire-task")
@@ -1421,5 +1424,405 @@ class TestResumingTasksVisibility:
         # Task should be removed from _resuming_tasks after completion
         async with task_manager._lock:
             assert task_id not in task_manager._resuming_tasks
+
+        await task_manager.stop()
+
+
+class TestProgressServiceIntegration:
+    """Tests for ProgressService integration with TaskManager."""
+
+    @pytest.mark.asyncio
+    async def test_set_progress_service(self, task_manager):
+        """Test that set_progress_service attaches the service."""
+        from mail_agent.a2a.progress_service import ProgressService
+        from mail_agent.a2a.progress_store import ProgressStore
+
+        await task_manager.start()
+
+        # Initially no progress service
+        assert task_manager._progress_service is None
+
+        # Create a mock progress service
+        mock_progress_service = MagicMock(spec=ProgressService)
+
+        # Attach it
+        task_manager.set_progress_service(mock_progress_service)
+
+        assert task_manager._progress_service is mock_progress_service
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_webhook_multi_poc_emits_webhook_received_event(
+        self, task_manager, task_store
+    ):
+        """Test that webhook handling emits webhook_received event via ProgressService."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend multi-POC task
+        poc_emails = ["poc1@example.com", "poc2@example.com", "poc3@example.com"]
+        await task_manager.suspend_task_multi_poc(
+            task_id="progress-multi-task",
+            poc_emails=poc_emails,
+            thread_id="thread-progress",
+        )
+
+        # First webhook arrives
+        payload1 = WebhookPayload(
+            event="email.received",
+            email_id="email-progress-1",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload1)
+
+        # Verify emit_webhook_received was called
+        mock_progress_service.emit_webhook_received.assert_called_once_with(
+            task_id="progress-multi-task",
+            poc_email="poc1@example.com",
+            received_count=1,
+            total_count=3,
+        )
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_webhook_multi_poc_emits_multiple_webhook_received_events(
+        self, task_manager, task_store
+    ):
+        """Test that each webhook arrival emits a webhook_received event."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_all_webhooks_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend multi-POC task
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+        await task_manager.suspend_task_multi_poc(
+            task_id="progress-multi-task-2",
+            poc_emails=poc_emails,
+            thread_id="thread-progress-2",
+        )
+
+        # Mock graph to avoid actual execution
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"final_node": {"success": True}}])
+        )
+
+        # First webhook
+        payload1 = WebhookPayload(
+            event="email.received",
+            email_id="email-p1",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload1)
+
+        # Second webhook (last one)
+        payload2 = WebhookPayload(
+            event="email.received",
+            email_id="email-p2",
+            from_address="poc2@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:31:00Z",
+        )
+        await task_manager.handle_webhook(payload2)
+
+        # Wait for background task
+        await asyncio.sleep(0.1)
+
+        # Verify emit_webhook_received was called twice (once per POC)
+        assert mock_progress_service.emit_webhook_received.call_count == 2
+
+        # Check first call arguments
+        first_call = mock_progress_service.emit_webhook_received.call_args_list[0]
+        assert first_call.kwargs["task_id"] == "progress-multi-task-2"
+        assert first_call.kwargs["poc_email"] == "poc1@example.com"
+        assert first_call.kwargs["received_count"] == 1
+        assert first_call.kwargs["total_count"] == 2
+
+        # Check second call arguments
+        second_call = mock_progress_service.emit_webhook_received.call_args_list[1]
+        assert second_call.kwargs["task_id"] == "progress-multi-task-2"
+        assert second_call.kwargs["poc_email"] == "poc2@example.com"
+        assert second_call.kwargs["received_count"] == 2
+        assert second_call.kwargs["total_count"] == 2
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_all_webhooks_received_emits_event(self, task_manager, task_store):
+        """Test that emit_all_webhooks_received is called when all POCs respond."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_all_webhooks_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend multi-POC task
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+        await task_manager.suspend_task_multi_poc(
+            task_id="all-webhooks-task",
+            poc_emails=poc_emails,
+            thread_id="thread-all",
+        )
+
+        # Mock graph
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"final_node": {"success": True}}])
+        )
+
+        # First webhook
+        payload1 = WebhookPayload(
+            event="email.received",
+            email_id="email-all-1",
+            from_address="poc1@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload1)
+
+        # emit_all_webhooks_received should NOT be called yet
+        mock_progress_service.emit_all_webhooks_received.assert_not_called()
+
+        # Second webhook (last one)
+        payload2 = WebhookPayload(
+            event="email.received",
+            email_id="email-all-2",
+            from_address="poc2@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:31:00Z",
+        )
+        await task_manager.handle_webhook(payload2)
+
+        # Wait for background task
+        await asyncio.sleep(0.1)
+
+        # emit_all_webhooks_received should be called now
+        mock_progress_service.emit_all_webhooks_received.assert_called_once_with(
+            task_id="all-webhooks-task",
+            poc_emails=poc_emails,
+        )
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_task_resumed_event_emitted_multi_poc(self, task_manager, task_store):
+        """Test that emit_task_resumed is called when resuming multi-POC task."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_all_webhooks_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend multi-POC task
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+        await task_manager.suspend_task_multi_poc(
+            task_id="resumed-task-multi",
+            poc_emails=poc_emails,
+            thread_id="thread-resumed",
+        )
+
+        # Mock graph
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"final_node": {"success": True}}])
+        )
+
+        # First and second webhook to trigger resume
+        for i, poc in enumerate(poc_emails):
+            payload = WebhookPayload(
+                event="email.received",
+                email_id=f"email-resume-{i}",
+                from_address=poc,
+                to=["agent@mail.local"],
+                subject="Re: Request",
+                has_attachments=False,
+                attachment_count=0,
+                received_at="2025-12-15T10:30:00Z",
+            )
+            await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.1)
+
+        # emit_task_resumed should be called with poc_emails list
+        mock_progress_service.emit_task_resumed.assert_called_once_with(
+            task_id="resumed-task-multi",
+            poc_emails=poc_emails,
+        )
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_single_poc_webhook_emits_webhook_received_event(
+        self, task_manager, task_store
+    ):
+        """Test that single-POC webhook handling emits webhook_received event."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend single-POC task
+        await task_manager.suspend_task(
+            task_id="progress-single-task",
+            poc_email="single-poc@example.com",
+            thread_id="thread-single-progress",
+        )
+
+        # Mock graph
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"final_node": {"success": True}}])
+        )
+
+        # Webhook arrives
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-single-progress",
+            from_address="single-poc@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.1)
+
+        # Verify emit_webhook_received was called
+        mock_progress_service.emit_webhook_received.assert_called_once_with(
+            task_id="progress-single-task",
+            poc_email="single-poc@example.com",
+            received_count=1,
+            total_count=1,
+        )
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_single_poc_task_resumed_event_emitted(
+        self, task_manager, task_store
+    ):
+        """Test that emit_task_resumed is called when resuming single-POC task."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend single-POC task
+        await task_manager.suspend_task(
+            task_id="resumed-task-single",
+            poc_email="resume-poc@example.com",
+            thread_id="thread-resumed-single",
+        )
+
+        # Mock graph
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"final_node": {"success": True}}])
+        )
+
+        # Webhook arrives
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-resumed-single",
+            from_address="resume-poc@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.1)
+
+        # emit_task_resumed should be called with poc_emails list
+        mock_progress_service.emit_task_resumed.assert_called_once_with(
+            task_id="resumed-task-single",
+            poc_emails=["resume-poc@example.com"],
+        )
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_event_emitted_without_progress_service(
+        self, task_manager, task_store
+    ):
+        """Test that no error occurs when progress_service is not set."""
+        await task_manager.start()
+
+        # Don't set progress service - should be None
+        assert task_manager._progress_service is None
+
+        # Suspend multi-POC task
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+        await task_manager.suspend_task_multi_poc(
+            task_id="no-service-task",
+            poc_emails=poc_emails,
+            thread_id="thread-no-service",
+        )
+
+        # Mock graph
+        task_manager._graph.astream = AsyncMock(
+            return_value=iter([{"final_node": {"success": True}}])
+        )
+
+        # Webhooks should work without errors even without progress service
+        for i, poc in enumerate(poc_emails):
+            payload = WebhookPayload(
+                event="email.received",
+                email_id=f"email-no-service-{i}",
+                from_address=poc,
+                to=["agent@mail.local"],
+                subject="Re: Request",
+                has_attachments=False,
+                attachment_count=0,
+                received_at="2025-12-15T10:30:00Z",
+            )
+            result = await task_manager.handle_webhook(payload)
+            assert result is True
+
+        await asyncio.sleep(0.1)
 
         await task_manager.stop()

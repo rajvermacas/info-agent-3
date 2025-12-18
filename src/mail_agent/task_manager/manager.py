@@ -30,6 +30,12 @@ from mail_agent.task_manager.models import (
     WebhookPayload,
 )
 
+# Import ProgressService type for type hinting (avoid circular import)
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mail_agent.a2a.progress_service import ProgressService
+
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +127,25 @@ class TaskManager:
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
 
+        # Progress service for emitting events (set via set_progress_service)
+        self._progress_service: Optional["ProgressService"] = None
+
         logger.info("TaskManager initialized")
+
+    def set_progress_service(self, progress_service: "ProgressService") -> None:
+        """
+        Set the progress service for event emission.
+
+        Called during application setup after both TaskManager and
+        ProgressService are created.
+
+        Args:
+            progress_service: ProgressService instance for emitting events.
+        """
+        if progress_service is None:
+            raise ValueError("progress_service cannot be None")
+        self._progress_service = progress_service
+        logger.info("ProgressService attached to TaskManager")
 
     @property
     def graph(self) -> CompiledStateGraph:
@@ -434,6 +458,19 @@ class TaskManager:
 
         await self._task_store.remove_suspended_task(task_id)
 
+        # Emit webhook received event for single-POC
+        if self._progress_service is not None:
+            try:
+                await self._progress_service.emit_webhook_received(
+                    task_id=task_id,
+                    poc_email=sender,
+                    received_count=1,
+                    total_count=1,
+                )
+                logger.debug(f"Emitted webhook received event for single-POC {sender}")
+            except Exception as e:
+                logger.error(f"Failed to emit webhook received event: {e}")
+
         # Resume task in background
         logger.info(f"Resuming single-POC task {task_id} with webhook data")
         asyncio.create_task(
@@ -493,6 +530,23 @@ class TaskManager:
             f"all_received={all_received}, remaining={remaining}"
         )
 
+        # Emit progress event for webhook received
+        total_count = len(task_info["poc_emails"])
+        received_count = total_count - remaining
+        if self._progress_service is not None:
+            try:
+                await self._progress_service.emit_webhook_received(
+                    task_id=task_id,
+                    poc_email=sender,
+                    received_count=received_count,
+                    total_count=total_count,
+                )
+                logger.debug(
+                    f"Emitted webhook received event for {sender} ({received_count}/{total_count})"
+                )
+            except Exception as e:
+                logger.error(f"Failed to emit webhook received event: {e}")
+
         if not all_received:
             # Still waiting for more POCs - don't resume yet
             logger.info(
@@ -505,6 +559,19 @@ class TaskManager:
             f"All {len(task_info['poc_emails'])} POCs have responded for task {task_id}, "
             "preparing to resume"
         )
+
+        # Emit "all webhooks received" event
+        if self._progress_service is not None:
+            try:
+                await self._progress_service.emit_all_webhooks_received(
+                    task_id=task_id,
+                    poc_emails=task_info["poc_emails"],
+                )
+                logger.debug(
+                    f"Emitted all webhooks received event for task {task_id}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to emit all webhooks received event: {e}")
 
         # Get all collected webhooks
         all_webhooks = await self._task_store.get_all_webhooks_for_task(task_id)
@@ -562,6 +629,18 @@ class TaskManager:
             payload: Webhook payload with resume data.
         """
         logger.info(f"Resuming task {task_id} from checkpoint")
+
+        # Emit "task resumed" progress event
+        poc_email = payload.from_address
+        if self._progress_service is not None:
+            try:
+                await self._progress_service.emit_task_resumed(
+                    task_id=task_id,
+                    poc_emails=[poc_email],
+                )
+                logger.debug(f"Emitted task resumed event for task {task_id}")
+            except Exception as e:
+                logger.error(f"Failed to emit task resumed event: {e}")
 
         config = {"configurable": {"thread_id": thread_id}}
         resume_data = payload.to_resume_data()
@@ -761,6 +840,18 @@ class TaskManager:
             f"Resuming multi-POC task {task_id} from checkpoint with "
             f"{len(all_webhooks)} webhooks"
         )
+
+        # Emit "task resumed" progress event
+        poc_emails = list(all_webhooks.keys())
+        if self._progress_service is not None:
+            try:
+                await self._progress_service.emit_task_resumed(
+                    task_id=task_id,
+                    poc_emails=poc_emails,
+                )
+                logger.debug(f"Emitted task resumed event for task {task_id}")
+            except Exception as e:
+                logger.error(f"Failed to emit task resumed event: {e}")
 
         config = {"configurable": {"thread_id": thread_id}}
 
@@ -1148,10 +1239,11 @@ class TaskManager:
         logger.info("Cleanup loop stopped")
 
     async def _cleanup_expired_tasks(self) -> None:
-        """Clean up expired suspended tasks."""
+        """Clean up expired suspended tasks (both single-POC and multi-POC)."""
         logger.debug("Running expired task cleanup")
 
         try:
+            # Handle single-POC expired tasks
             expired_tasks = await self._task_store.get_expired_tasks()
 
             for task in expired_tasks:
@@ -1161,7 +1253,19 @@ class TaskManager:
                 )
 
             if expired_tasks:
-                logger.info(f"Cleaned up {len(expired_tasks)} expired tasks")
+                logger.info(f"Cleaned up {len(expired_tasks)} expired single-POC tasks")
+
+            # Handle multi-POC expired tasks
+            expired_multi_tasks = await self._task_store.get_expired_tasks_multi_poc()
+
+            for task in expired_multi_tasks:
+                await self._handle_expired_task_multi_poc(
+                    task["task_id"],
+                    task["poc_emails"],
+                )
+
+            if expired_multi_tasks:
+                logger.info(f"Cleaned up {len(expired_multi_tasks)} expired multi-POC tasks")
 
         except Exception as e:
             logger.error(f"Error during expired task cleanup: {e}")
@@ -1186,6 +1290,32 @@ class TaskManager:
         )
 
         logger.info(f"Expired task {task_id} cleaned up")
+
+    async def _handle_expired_task_multi_poc(
+        self, task_id: str, poc_emails: list[str]
+    ) -> None:
+        """Handle an expired multi-POC task - remove from state and store failure."""
+        logger.info(f"Handling expired multi-POC task {task_id} with POCs: {poc_emails}")
+
+        # Remove all POCs from in-memory mapping
+        async with self._lock:
+            for poc_email in poc_emails:
+                poc_lower = poc_email.lower()
+                if poc_lower in self._poc_to_task:
+                    del self._poc_to_task[poc_lower]
+                    logger.debug(f"Removed expired POC mapping: {poc_lower}")
+
+        # Remove from suspended_tasks_multi table
+        await self._task_store.remove_suspended_task_multi_poc(task_id)
+
+        # Store failure result
+        await self._task_store.save_result(
+            task_id=task_id,
+            status="failed",
+            error=f"Task expired: no replies received within {self._settings.task_suspend_timeout_seconds} seconds",
+        )
+
+        logger.info(f"Expired multi-POC task {task_id} cleaned up")
 
     # =========================================================================
     # Utility Methods

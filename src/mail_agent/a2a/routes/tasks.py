@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mail_agent.a2a.progress_store import ProgressStore
+    from mail_agent.a2a.progress_service import ProgressService
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,28 @@ class TaskNotFoundResponse(BaseModel):
     task_id: str = Field(description="The task ID that was not found")
 
 
+class ActivityEventResponse(BaseModel):
+    """Response model for a single activity event."""
+
+    event_id: int = Field(description="Sequential event ID")
+    task_id: str = Field(description="Task identifier")
+    state: str = Field(description="Task state at this event")
+    node: str | None = Field(default=None, description="Graph node name")
+    message: str = Field(description="Progress message")
+    poc_email: str | None = Field(default=None, description="POC email")
+    result: dict[str, Any] | None = Field(default=None, description="Result data")
+    error: str | None = Field(default=None, description="Error message")
+    timestamp: str = Field(description="Event timestamp (ISO format)")
+
+
+class TaskActivityResponse(BaseModel):
+    """Response model for task activity history."""
+
+    task_id: str = Field(description="Task identifier")
+    events: list[ActivityEventResponse] = Field(description="Activity events")
+    event_count: int = Field(description="Total number of events")
+
+
 # ============================================================================
 # Router Factory
 # ============================================================================
@@ -101,6 +124,7 @@ class TaskNotFoundResponse(BaseModel):
 def create_tasks_router(
     task_manager: TaskManager,
     progress_store: "ProgressStore | None" = None,
+    progress_service: "ProgressService | None" = None,
 ) -> APIRouter:
     """
     Create the tasks router with dependency injection.
@@ -108,6 +132,7 @@ def create_tasks_router(
     Args:
         task_manager: TaskManager instance for querying task status.
         progress_store: Optional ProgressStore for tracking in-flight tasks.
+        progress_service: Optional ProgressService for activity history queries.
 
     Returns:
         Configured APIRouter with task endpoints.
@@ -247,5 +272,113 @@ def create_tasks_router(
         logger.info(f"GET /tasks - returning {len(tasks_list)} tasks")
 
         return {"tasks": tasks_list}
+
+    @router.get(
+        "/{task_id}/activity",
+        response_model=TaskActivityResponse,
+        responses={
+            200: {"description": "Activity history retrieved successfully"},
+            404: {
+                "description": "Task not found or no activity recorded",
+                "model": TaskNotFoundResponse,
+            },
+            503: {
+                "description": "Progress service not available",
+            },
+        },
+        summary="Get task activity history",
+        description=(
+            "Get the full activity history for a task. Returns all progress events "
+            "from task start to completion, including webhook arrivals and validation results."
+        ),
+    )
+    async def get_task_activity(task_id: str) -> TaskActivityResponse:
+        """
+        Get the full activity history for a task.
+
+        Returns all progress events from the database, providing a complete
+        audit trail of task execution including:
+        - Initial task creation
+        - Node executions (parse, compose, send, etc.)
+        - Webhook arrivals (POC replies)
+        - Validation results
+        - Task completion or failure
+
+        Args:
+            task_id: The unique task identifier.
+
+        Returns:
+            TaskActivityResponse with list of activity events.
+
+        Raises:
+            HTTPException 404: If task not found or no activity recorded.
+            HTTPException 503: If progress service not available.
+        """
+        logger.info(f"GET /tasks/{task_id}/activity - fetching activity history")
+
+        if progress_service is None:
+            logger.error(
+                f"GET /tasks/{task_id}/activity - progress service not available"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": "Progress service not available",
+                    "task_id": task_id,
+                },
+            )
+
+        try:
+            events = await progress_service.get_activity_history(task_id)
+
+            if not events:
+                # Check if task exists at all
+                try:
+                    await task_manager.get_task_status(task_id)
+                    # Task exists but no events - return empty list
+                    logger.info(
+                        f"GET /tasks/{task_id}/activity - task exists but no events"
+                    )
+                except Exception:
+                    logger.warning(f"GET /tasks/{task_id}/activity - task not found")
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail={"error": "Task not found", "task_id": task_id},
+                    )
+
+            # Convert to response model
+            event_responses = [
+                ActivityEventResponse(
+                    event_id=event["event_id"],
+                    task_id=event["task_id"],
+                    state=event["state"],
+                    node=event.get("node"),
+                    message=event["message"],
+                    poc_email=event.get("poc_email"),
+                    result=event.get("result"),
+                    error=event.get("error"),
+                    timestamp=event["timestamp"],
+                )
+                for event in events
+            ]
+
+            logger.info(
+                f"GET /tasks/{task_id}/activity - returning {len(event_responses)} events"
+            )
+
+            return TaskActivityResponse(
+                task_id=task_id,
+                events=event_responses,
+                event_count=len(event_responses),
+            )
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"GET /tasks/{task_id}/activity - error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": str(e), "task_id": task_id},
+            )
 
     return router

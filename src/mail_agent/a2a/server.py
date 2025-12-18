@@ -25,6 +25,7 @@ from a2a.server.tasks import InMemoryTaskStore
 
 from mail_agent.a2a.agent_card import create_agent_card
 from mail_agent.a2a.executor import MailAgentA2AExecutor
+from mail_agent.a2a.progress_service import ProgressService
 from mail_agent.a2a.progress_store import ProgressStore
 from mail_agent.a2a.routes import create_tasks_router, create_progress_router
 from mail_agent.agent.graph import (
@@ -56,6 +57,7 @@ class A2AServerResources:
         webhook_server: WebhookServer,
         db_manager: DatabaseManager,
         progress_store: ProgressStore,
+        progress_service: ProgressService,
     ) -> None:
         """
         Initialize resource container.
@@ -66,12 +68,14 @@ class A2AServerResources:
             webhook_server: WebhookServer for email notifications.
             db_manager: DatabaseManager for persistence.
             progress_store: ProgressStore for progress event streaming.
+            progress_service: ProgressService for event emission and persistence.
         """
         self.app = app
         self.task_manager = task_manager
         self.webhook_server = webhook_server
         self.db_manager = db_manager
         self.progress_store = progress_store
+        self.progress_service = progress_service
 
 
 async def create_a2a_application(
@@ -144,13 +148,24 @@ async def create_a2a_application(
     progress_store = ProgressStore(cleanup_delay_seconds=300.0)
     logger.info("ProgressStore created for SSE streaming")
 
-    # 9. Create executor with TaskManager and ProgressStore
+    # 9. Create ProgressService for unified event emission and persistence
+    progress_service = ProgressService(
+        progress_store=progress_store,
+        db_manager=db_manager,
+    )
+    logger.info("ProgressService created for event emission and persistence")
+
+    # 10. Attach ProgressService to TaskManager for webhook event emission
+    task_manager.set_progress_service(progress_service)
+    logger.info("ProgressService attached to TaskManager")
+
+    # 11. Create executor with TaskManager and ProgressService
     executor = MailAgentA2AExecutor(
         graph=graph,
         task_manager=task_manager,
-        progress_store=progress_store,
+        progress_service=progress_service,
     )
-    logger.info("A2A executor created (non-blocking with progress store)")
+    logger.info("A2A executor created (non-blocking with progress service)")
 
     # 10. Create request handler with in-memory task store
     a2a_task_store = InMemoryTaskStore()
@@ -168,10 +183,14 @@ async def create_a2a_application(
     app = app_builder.build()
     logger.info("A2A Starlette application built")
 
-    # 12. Mount task and progress routes as FastAPI sub-application
+    # 14. Mount task and progress routes as FastAPI sub-application
     # FastAPI routes need FastAPI's dependency injection and routing,
     # so we mount a FastAPI app instead of converting routes manually.
-    tasks_router = create_tasks_router(task_manager, progress_store)
+    tasks_router = create_tasks_router(
+        task_manager=task_manager,
+        progress_store=progress_store,
+        progress_service=progress_service,
+    )
     progress_router = create_progress_router(progress_store)
     from fastapi import FastAPI as TaskFastAPI
     from starlette.routing import Mount
@@ -180,7 +199,7 @@ async def create_a2a_application(
     task_app.include_router(progress_router)
     # Mount at /api so routes become /api/tasks, /api/tasks/{task_id}, /api/tasks/{task_id}/progress
     app.routes.append(Mount("/api", app=task_app))
-    logger.info("Task and progress routes mounted at /api/tasks")
+    logger.info("Task and progress routes mounted at /api/tasks (with activity history)")
 
     return A2AServerResources(
         app=app,
@@ -188,6 +207,7 @@ async def create_a2a_application(
         webhook_server=webhook_server,
         db_manager=db_manager,
         progress_store=progress_store,
+        progress_service=progress_service,
     )
 
 

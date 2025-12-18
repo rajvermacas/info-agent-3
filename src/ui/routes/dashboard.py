@@ -117,3 +117,46 @@ async def get_task_status(request: Request, task_id: str) -> HTMLResponse:
                 "error": str(e),
             },
         )
+
+
+@router.get("/task/{task_id}/activity", response_class=HTMLResponse)
+async def get_task_activity(request: Request, task_id: str) -> HTMLResponse:
+    """
+    Get task activity history.
+
+    Returns HTML partial with activity timeline showing all events
+    from task start to completion/suspension.
+
+    Args:
+        task_id: The task ID.
+
+    Returns:
+        HTML partial with activity timeline.
+    """
+    logger.info("Getting task activity: %s", task_id)
+    resources = get_resources()
+
+    try:
+        activity = await resources.a2a_client.get_task_activity(task_id)
+
+        return resources.templates.TemplateResponse(
+            "partials/task_activity.html",
+            {
+                "request": request,
+                "task_id": task_id,
+                "events": activity.events,
+                "event_count": activity.event_count,
+            },
+        )
+    except A2AClientError as e:
+        logger.error("A2A error getting task activity: %s", e)
+        return resources.templates.TemplateResponse(
+            "partials/task_activity.html",
+            {
+                "request": request,
+                "task_id": task_id,
+                "events": [],
+                "event_count": 0,
+                "error": str(e),
+            },
+        )

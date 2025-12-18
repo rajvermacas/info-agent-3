@@ -54,3 +54,7 @@ Expectation:
 Reply from either of the POCs should be tracked along with if there are validation failures so those also need to be updated and tracked with a summary of what failed exactly.
 And in the completed state the json dump is fine in the result but it should also show all the agentic steps that were performed from the parsing of instrcutions till the successful response of information which is currently missing from the dashboard task.
 ----------------------------------
+
+Issues:
+1. No success emails are sent after validation
+2. 

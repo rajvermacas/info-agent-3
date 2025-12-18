@@ -115,6 +115,34 @@ class DatabaseManager:
         ON poc_task_mapping(task_id)
     """
 
+    # Progress events table for activity history persistence
+    CREATE_PROGRESS_EVENTS_TABLE = """
+        CREATE TABLE IF NOT EXISTS progress_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            event_id INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            node TEXT,
+            message TEXT NOT NULL,
+            poc_email TEXT,
+            result TEXT,
+            error TEXT,
+            timestamp TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(task_id, event_id)
+        )
+    """
+
+    CREATE_PROGRESS_EVENTS_TASK_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_progress_events_task_id
+        ON progress_events(task_id)
+    """
+
+    CREATE_PROGRESS_EVENTS_TIMESTAMP_INDEX = """
+        CREATE INDEX IF NOT EXISTS idx_progress_events_timestamp
+        ON progress_events(timestamp)
+    """
+
     def __init__(self, settings: Optional[Settings] = None) -> None:
         """
         Initialize database manager.
@@ -209,6 +237,12 @@ class DatabaseManager:
         await self._connection.execute(self.CREATE_POC_TASK_MAPPING_TABLE)
         await self._connection.execute(self.CREATE_POC_TASK_MAPPING_INDEX)
         logger.debug("poc_task_mapping table ready")
+
+        # Create progress events table (for activity history persistence)
+        await self._connection.execute(self.CREATE_PROGRESS_EVENTS_TABLE)
+        await self._connection.execute(self.CREATE_PROGRESS_EVENTS_TASK_INDEX)
+        await self._connection.execute(self.CREATE_PROGRESS_EVENTS_TIMESTAMP_INDEX)
+        logger.debug("progress_events table ready")
 
         await self._connection.commit()
         logger.info("All custom tables created/verified")

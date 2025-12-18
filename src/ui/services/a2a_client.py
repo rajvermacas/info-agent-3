@@ -61,6 +61,30 @@ class AgentInfo:
     capabilities: list[str] | None = None
 
 
+@dataclass
+class ActivityEvent:
+    """Information about a task activity event."""
+
+    event_id: int
+    task_id: str
+    state: str
+    message: str
+    timestamp: str
+    node: str | None = None
+    poc_email: str | None = None
+    result: dict | None = None
+    error: str | None = None
+
+
+@dataclass
+class TaskActivity:
+    """Activity history for a task."""
+
+    task_id: str
+    events: list[ActivityEvent]
+    event_count: int
+
+
 class A2AClientService:
     """
     Client service for A2A server communication.
@@ -349,6 +373,68 @@ class A2AClientService:
             raise A2ATaskError(f"HTTP error: {e.response.status_code}") from e
         except Exception as e:
             logger.error("Unexpected error listing tasks: %s", e)
+            raise A2ATaskError(f"Unexpected error: {e}") from e
+
+    async def get_task_activity(self, task_id: str) -> TaskActivity:
+        """
+        Get the activity history for a task.
+
+        Returns all progress events from task start to completion,
+        including webhook arrivals, validation results, and node executions.
+
+        Args:
+            task_id: The task ID to get activity for.
+
+        Returns:
+            TaskActivity with list of events.
+
+        Raises:
+            A2ATaskError: If fetching activity fails.
+        """
+        logger.info("Getting activity for task: %s", task_id)
+        client = await self._get_client()
+
+        try:
+            response = await client.get(f"/api/tasks/{task_id}/activity")
+            response.raise_for_status()
+            data = response.json()
+
+            logger.debug("Task activity response: %s events", data.get("event_count", 0))
+
+            events = []
+            for event_data in data.get("events", []):
+                events.append(
+                    ActivityEvent(
+                        event_id=event_data.get("event_id", 0),
+                        task_id=event_data.get("task_id", task_id),
+                        state=event_data.get("state", "unknown"),
+                        message=event_data.get("message", ""),
+                        timestamp=event_data.get("timestamp", ""),
+                        node=event_data.get("node"),
+                        poc_email=event_data.get("poc_email"),
+                        result=event_data.get("result"),
+                        error=event_data.get("error"),
+                    )
+                )
+
+            logger.info("Found %d activity events for task %s", len(events), task_id)
+
+            return TaskActivity(
+                task_id=task_id,
+                events=events,
+                event_count=len(events),
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning("Task activity not found: %s", task_id)
+                raise A2ATaskError(f"Task not found: {task_id}") from e
+            if e.response.status_code == 503:
+                logger.error("Progress service unavailable for task: %s", task_id)
+                raise A2ATaskError("Progress service unavailable") from e
+            logger.error("HTTP error getting task activity: %s", e)
+            raise A2ATaskError(f"HTTP error: {e.response.status_code}") from e
+        except Exception as e:
+            logger.error("Unexpected error getting task activity: %s", e)
             raise A2ATaskError(f"Unexpected error: {e}") from e
 
     async def check_health(self) -> bool:
