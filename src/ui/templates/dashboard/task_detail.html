@@ -75,16 +75,32 @@
             </dl>
         </div>
 
-        <!-- Progress Log Section (for non-terminal states) -->
-        {% if task.state not in ['completed', 'failed'] %}
+        <!-- Progress Log Section -->
         <div class="mb-4">
             <h4 class="text-sm font-medium text-gray-700 mb-2">Agent Activity</h4>
+            {% if task.state not in ['completed', 'failed'] %}
+            <!-- Active tasks: SSE streaming for real-time updates -->
             {% set task_id = task.task_id %}
             {% set show_header = false %}
             {% set max_height = "max-h-64" %}
             {% include 'partials/progress_log.html' with context %}
+            {% else %}
+            <!-- Terminal tasks: Load persisted activity history from database -->
+            <div id="task-activity-container-{{ task.task_id }}"
+                 hx-get="/dashboard/task/{{ task.task_id }}/activity"
+                 hx-trigger="load"
+                 hx-swap="innerHTML"
+                 class="text-sm text-gray-500">
+                <div class="flex items-center space-x-2">
+                    <svg class="animate-spin h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Loading activity history...</span>
+                </div>
+            </div>
+            {% endif %}
         </div>
-        {% endif %}
 
         <!-- Result Section -->
         {% if task.result %}

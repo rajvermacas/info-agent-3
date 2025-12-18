@@ -669,6 +669,36 @@ class TaskManager:
                         await self._handle_re_suspend(task_id, event, thread_id)
                         return
 
+                    # Emit progress event for resumed execution
+                    if self._progress_service is not None and node_name != "__interrupt__":
+                        try:
+                            # Extract message from node output
+                            message = f"Completed {node_name}"
+                            if isinstance(node_output, dict):
+                                progress_msgs = node_output.get("progress_messages", [])
+                                if progress_msgs:
+                                    message = progress_msgs[-1]
+                            # Extract POC email if available
+                            current_poc = None
+                            if isinstance(node_output, dict):
+                                current_poc = node_output.get("current_poc")
+                            await self._progress_service.emit_event(
+                                task_id=task_id,
+                                state=TaskState.WORKING,
+                                node=node_name,
+                                message=message,
+                                poc_email=current_poc,
+                            )
+                            logger.debug(
+                                f"Emitted progress event for node {node_name} "
+                                f"in resumed task {task_id}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to emit progress event for node "
+                                f"{node_name}: {e}"
+                            )
+
                     # Track final state
                     if final_state is None:
                         final_state = {}
@@ -685,6 +715,25 @@ class TaskManager:
                     error=final_state.get("error"),
                 )
                 logger.info(f"Task {task_id} resumed and completed with status: {status}")
+
+                # Emit final completed/failed event
+                if self._progress_service is not None:
+                    try:
+                        final_summary = final_state.get("final_summary", "")
+                        error_msg = final_state.get("error")
+                        await self._progress_service.emit_event(
+                            task_id=task_id,
+                            state=TaskState.COMPLETED if success else TaskState.FAILED,
+                            node="end",
+                            message=final_summary if success else f"Task failed: {error_msg}",
+                            result=final_state if success else None,
+                            error=error_msg,
+                        )
+                        logger.debug(
+                            f"Emitted final {status} event for resumed task {task_id}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to emit final event: {e}")
             else:
                 await self._task_store.save_result(
                     task_id=task_id,
@@ -692,6 +741,19 @@ class TaskManager:
                     error="Graph completed without final state",
                 )
                 logger.error(f"Task {task_id} completed without final state")
+
+                # Emit failed event for missing final state
+                if self._progress_service is not None:
+                    try:
+                        await self._progress_service.emit_event(
+                            task_id=task_id,
+                            state=TaskState.FAILED,
+                            node="end",
+                            message="Task failed: Graph completed without final state",
+                            error="Graph completed without final state",
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to emit final event: {e}")
 
             # Remove from resuming tasks after result is saved
             async with self._lock:
@@ -705,6 +767,20 @@ class TaskManager:
                 status="failed",
                 error=str(e),
             )
+
+            # Emit failed event for exception
+            if self._progress_service is not None:
+                try:
+                    await self._progress_service.emit_event(
+                        task_id=task_id,
+                        state=TaskState.FAILED,
+                        node="end",
+                        message=f"Task failed during resume: {e}",
+                        error=str(e),
+                    )
+                except Exception as emit_err:
+                    logger.error(f"Failed to emit failure event: {emit_err}")
+
             # Remove from resuming tasks even on error
             async with self._lock:
                 self._resuming_tasks.pop(task_id, None)
@@ -890,6 +966,36 @@ class TaskManager:
                         )
                         return
 
+                    # Emit progress event for resumed execution
+                    if self._progress_service is not None and node_name != "__interrupt__":
+                        try:
+                            # Extract message from node output
+                            message = f"Completed {node_name}"
+                            if isinstance(node_output, dict):
+                                progress_msgs = node_output.get("progress_messages", [])
+                                if progress_msgs:
+                                    message = progress_msgs[-1]
+                            # Extract POC email if available
+                            current_poc = None
+                            if isinstance(node_output, dict):
+                                current_poc = node_output.get("current_poc")
+                            await self._progress_service.emit_event(
+                                task_id=task_id,
+                                state=TaskState.WORKING,
+                                node=node_name,
+                                message=message,
+                                poc_email=current_poc,
+                            )
+                            logger.debug(
+                                f"Emitted progress event for node {node_name} "
+                                f"in resumed multi-POC task {task_id}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to emit progress event for node "
+                                f"{node_name}: {e}"
+                            )
+
                     # Track final state
                     if final_state is None:
                         final_state = {}
@@ -908,6 +1014,26 @@ class TaskManager:
                 logger.info(
                     f"Multi-POC task {task_id} resumed and completed with status: {status}"
                 )
+
+                # Emit final completed/failed event
+                if self._progress_service is not None:
+                    try:
+                        final_summary = final_state.get("final_summary", "")
+                        error_msg = final_state.get("error")
+                        await self._progress_service.emit_event(
+                            task_id=task_id,
+                            state=TaskState.COMPLETED if success else TaskState.FAILED,
+                            node="end",
+                            message=final_summary if success else f"Task failed: {error_msg}",
+                            result=final_state if success else None,
+                            error=error_msg,
+                        )
+                        logger.debug(
+                            f"Emitted final {status} event for resumed "
+                            f"multi-POC task {task_id}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to emit final event: {e}")
             else:
                 await self._task_store.save_result(
                     task_id=task_id,
@@ -915,6 +1041,19 @@ class TaskManager:
                     error="Graph completed without final state",
                 )
                 logger.error(f"Multi-POC task {task_id} completed without final state")
+
+                # Emit failed event for missing final state
+                if self._progress_service is not None:
+                    try:
+                        await self._progress_service.emit_event(
+                            task_id=task_id,
+                            state=TaskState.FAILED,
+                            node="end",
+                            message="Task failed: Graph completed without final state",
+                            error="Graph completed without final state",
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to emit final event: {e}")
 
             # Remove from resuming tasks after result is saved
             async with self._lock:
@@ -928,6 +1067,20 @@ class TaskManager:
                 status="failed",
                 error=str(e),
             )
+
+            # Emit failed event for exception
+            if self._progress_service is not None:
+                try:
+                    await self._progress_service.emit_event(
+                        task_id=task_id,
+                        state=TaskState.FAILED,
+                        node="end",
+                        message=f"Multi-POC task failed during resume: {e}",
+                        error=str(e),
+                    )
+                except Exception as emit_err:
+                    logger.error(f"Failed to emit failure event: {emit_err}")
+
             # Remove from resuming tasks even on error
             async with self._lock:
                 self._resuming_tasks.pop(task_id, None)

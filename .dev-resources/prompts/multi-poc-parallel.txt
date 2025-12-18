@@ -57,4 +57,4 @@ And in the completed state the json dump is fine in the result but it should als
 
 Issues:
 1. No success emails are sent after validation
-2. 
+2. The completed task doesn't show

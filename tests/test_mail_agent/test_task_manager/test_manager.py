@@ -1826,3 +1826,245 @@ class TestProgressServiceIntegration:
         await asyncio.sleep(0.1)
 
         await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_resume_task_emits_node_progress_events(
+        self, task_manager, task_store
+    ):
+        """Test that resumed task execution emits progress events for each node."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        mock_progress_service.emit_event = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend single-POC task
+        await task_manager.suspend_task(
+            task_id="node-events-task",
+            poc_email="node-poc@example.com",
+            thread_id="thread-node-events",
+        )
+
+        # Mock graph to return multiple node events
+        async def mock_astream(*args, **kwargs):
+            # Simulate multiple nodes executing during resume
+            yield {"fetch_email": {"progress_messages": ["Fetching email from POC"]}}
+            yield {"extract_content": {"progress_messages": ["Extracting CSV content"]}}
+            yield {"validate_response": {"progress_messages": ["Validating response"]}}
+            yield {"end": {"final_summary": "Task completed successfully"}}
+
+        task_manager._graph.astream = mock_astream
+
+        # Webhook arrives
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-node-events",
+            from_address="node-poc@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.2)
+
+        # Verify emit_event was called for each node (4 nodes + 1 final)
+        # The final completed event is also emitted
+        assert mock_progress_service.emit_event.call_count >= 4
+
+        # Check that node names appear in the emit_event calls
+        call_nodes = [
+            call.kwargs.get("node")
+            for call in mock_progress_service.emit_event.call_args_list
+        ]
+        assert "fetch_email" in call_nodes
+        assert "extract_content" in call_nodes
+        assert "validate_response" in call_nodes
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_resume_task_multi_poc_emits_node_progress_events(
+        self, task_manager, task_store
+    ):
+        """Test that resumed multi-POC task execution emits progress events."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_all_webhooks_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        mock_progress_service.emit_event = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend multi-POC task
+        poc_emails = ["poc1@example.com", "poc2@example.com"]
+        await task_manager.suspend_task_multi_poc(
+            task_id="multi-node-events-task",
+            poc_emails=poc_emails,
+            thread_id="thread-multi-node",
+        )
+
+        # Mock graph to return multiple node events
+        async def mock_astream(*args, **kwargs):
+            yield {"process_all_replies": {"progress_messages": ["Processing all replies"]}}
+            yield {"validate_cross_poc": {"progress_messages": ["Cross-POC validation passed"]}}
+            yield {"compose_success_all": {"progress_messages": ["Composing success emails"]}}
+            yield {"send_success_all": {"progress_messages": ["Sent acknowledgments"]}}
+            yield {"end": {"final_summary": "Task completed for 2 POCs"}}
+
+        task_manager._graph.astream = mock_astream
+
+        # Both webhooks arrive
+        for i, poc in enumerate(poc_emails):
+            payload = WebhookPayload(
+                event="email.received",
+                email_id=f"email-multi-node-{i}",
+                from_address=poc,
+                to=["agent@mail.local"],
+                subject="Re: Request",
+                has_attachments=False,
+                attachment_count=0,
+                received_at="2025-12-15T10:30:00Z",
+            )
+            await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.2)
+
+        # Verify emit_event was called for each node
+        assert mock_progress_service.emit_event.call_count >= 4
+
+        # Check that node names appear in the emit_event calls
+        call_nodes = [
+            call.kwargs.get("node")
+            for call in mock_progress_service.emit_event.call_args_list
+        ]
+        assert "process_all_replies" in call_nodes
+        assert "validate_cross_poc" in call_nodes
+        assert "compose_success_all" in call_nodes
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_resume_task_emits_final_completed_event(
+        self, task_manager, task_store
+    ):
+        """Test that resumed task emits a final completed event with result."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        mock_progress_service.emit_event = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend single-POC task
+        await task_manager.suspend_task(
+            task_id="final-event-task",
+            poc_email="final-poc@example.com",
+            thread_id="thread-final-event",
+        )
+
+        # Mock graph
+        async def mock_astream(*args, **kwargs):
+            yield {"end": {"final_summary": "Successfully processed data"}}
+
+        task_manager._graph.astream = mock_astream
+
+        # Webhook arrives
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-final-event",
+            from_address="final-poc@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.2)
+
+        # Find the final completed event
+        final_event_calls = [
+            call for call in mock_progress_service.emit_event.call_args_list
+            if call.kwargs.get("node") == "end"
+        ]
+        assert len(final_event_calls) >= 1
+
+        # Verify the final event has COMPLETED state
+        from mail_agent.task_manager.models import TaskState
+        final_call = final_event_calls[-1]
+        assert final_call.kwargs.get("state") == TaskState.COMPLETED
+        assert "Successfully processed data" in final_call.kwargs.get("message", "")
+
+        await task_manager.stop()
+
+    @pytest.mark.asyncio
+    async def test_resume_task_emits_failed_event_on_error(
+        self, task_manager, task_store
+    ):
+        """Test that resumed task emits a failed event when graph fails."""
+        await task_manager.start()
+
+        # Create mock progress service
+        mock_progress_service = MagicMock()
+        mock_progress_service.emit_webhook_received = AsyncMock()
+        mock_progress_service.emit_task_resumed = AsyncMock()
+        mock_progress_service.emit_event = AsyncMock()
+        task_manager.set_progress_service(mock_progress_service)
+
+        # Suspend single-POC task
+        await task_manager.suspend_task(
+            task_id="error-event-task",
+            poc_email="error-poc@example.com",
+            thread_id="thread-error-event",
+        )
+
+        # Mock graph to raise exception
+        async def mock_astream_error(*args, **kwargs):
+            raise RuntimeError("Graph execution failed")
+
+        task_manager._graph.astream = mock_astream_error
+
+        # Webhook arrives
+        payload = WebhookPayload(
+            event="email.received",
+            email_id="email-error-event",
+            from_address="error-poc@example.com",
+            to=["agent@mail.local"],
+            subject="Re: Request",
+            has_attachments=False,
+            attachment_count=0,
+            received_at="2025-12-15T10:30:00Z",
+        )
+        await task_manager.handle_webhook(payload)
+
+        # Wait for background task
+        await asyncio.sleep(0.2)
+
+        # Find the failed event
+        failed_event_calls = [
+            call for call in mock_progress_service.emit_event.call_args_list
+            if call.kwargs.get("node") == "end"
+        ]
+        assert len(failed_event_calls) >= 1
+
+        # Verify the final event has FAILED state
+        from mail_agent.task_manager.models import TaskState
+        final_call = failed_event_calls[-1]
+        assert final_call.kwargs.get("state") == TaskState.FAILED
+        assert final_call.kwargs.get("error") is not None
+
+        await task_manager.stop()
