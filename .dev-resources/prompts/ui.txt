@@ -1,0 +1,17 @@
+I want to build a UI with htmx and tailwind css. The UI should have these features and flows:
+1. A user should be able to send a request like "Send mail to raj@gmail.com asking 10 food recipes in csv file". 
+Currently we run uv run python scripts/a2a_client.py to do the above task
+
+2. There should be a page where one can see the inboxes and reply with attachment.
+Currently to see inbox we need to hit: curl -X 'GET' \
+  'http://localhost:7335/api/inboxes/info-agent%40gmail.com' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://localhost:7335/api/inboxes/info-agent%40gmail.com/emails/3d83f1a3-8418-4f11-9c21-05e04f6e3e98' \
+  -H 'accept: application/json'
+
+To reply right now we use:
+uv run python scripts/poc_reply_simulator.py --from "raj@gmail.com" --to "info-agent@gmail.com" --subject "Re: Request: 10 Actor names" --body "Please find attached." --attachment ./test_data/sample_actors.csv
+
+3. There should be a UI where we can see the final result of the mail_agent

@@ -76,6 +76,16 @@ async def lifespan(app: FastAPI):
     )
     await smtp_server.start()
 
+    # Create and include API router AFTER resources are initialized
+    # This ensures the router captures the real instances, not fallbacks
+    api_router = create_api_router(
+        inbox_store=inbox_store,
+        webhook_registry=webhook_registry,
+        webhook_dispatcher=webhook_dispatcher
+    )
+    app.include_router(api_router)
+    logger.info("API router created and included with shared resources")
+
     logger.info(
         f"Mock SMTP Server started successfully\n"
         f"  SMTP: {settings.smtp_host}:{settings.smtp_port}\n"
@@ -118,12 +128,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan
     )
 
-    # Create and include API router
-    api_router = create_api_router(
-        inbox_store=inbox_store or InboxStore(),
-        webhook_registry=webhook_registry or WebhookRegistry()
-    )
-    app.include_router(api_router)
+    # NOTE: API router is created in lifespan() after shared resources are initialized
+    # This ensures the router uses the real InboxStore/WebhookRegistry instances
 
     # Root endpoint
     @app.get("/", tags=["Root"])

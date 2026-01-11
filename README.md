@@ -1,16 +1,30 @@
-# Mock SMTP Server
+# Info Agent
 
-A self-contained mock SMTP server for testing email functionality with a REST API and webhook support.
+Autonomous email interaction system with Mock SMTP server, LangGraph-powered mail agent, and web UI.
 
 ## Features
 
-- **SMTP Server** (port 1025) - Accepts emails via SMTP protocol
-- **REST API** (port 8025) - Inspect and manage emails via HTTP
-- **In-Memory Storage** - Ephemeral email storage (resets on restart)
-- **Webhook Notifications** - HTTP POST notifications when emails arrive
-- **Multiple Inboxes** - Implicit inbox creation on first email
-- **No Authentication** - Open relay for testing simplicity
-- **Swagger UI** - Interactive API documentation at `/docs`
+### Mock SMTP Server
+- **SMTP Server** (port 1025) - Standard SMTP protocol
+- **REST API** (port 8025) - HTTP interface with Swagger UI at `/docs`
+- **Webhook Notifications** - HTTP callbacks on email arrival
+- **In-Memory Storage** - Fast, ephemeral (resets on restart)
+- **Multiple Inboxes** - Auto-created on first email
+
+### Mail Agent
+- **Autonomous Workflows** - Send requests, validate responses, retry on failure
+- **LangGraph State Machine** - Parse → Compose → Send → Wait → Fetch → Validate → Decide
+- **LLM Integration** - Google Gemini or Azure OpenAI
+- **Attachment Handling** - CSV and Excel parsing
+- **State Persistence** - SQLite checkpointing for resumable tasks
+- **A2A Protocol** - Google Agent-to-Agent protocol (JSON-RPC 2.0)
+
+### UI Server
+- **Web Interface** - HTMX + Tailwind CSS
+- **Send Requests** - Submit tasks via web form
+- **Inbox Management** - View emails, download attachments, send replies
+- **Task Dashboard** - Real-time task monitoring with Server-Sent Events (SSE)
+- **Live Progress Updates** - Stream agent activity as it happens
 
 ## Quick Start
 
@@ -19,244 +33,328 @@ A self-contained mock SMTP server for testing email functionality with a REST AP
 ```bash
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install dependencies
-pip install -e .
-
-# Or install with dev dependencies
+# Install
 pip install -e ".[dev]"
+
+# Configure
+cp .env.example .env
+# Edit .env with your LLM API key (Gemini or Azure OpenAI)
 ```
 
-### Running the Server
+### Running
 
 ```bash
-# Start the server
-mock-smtp
+# Start Mock SMTP Server (SMTP: 1025, API: 8025)
+uv run mock-smtp
 
-# Or run directly
-python -m mock_smtp.main
+# Start Mail Agent A2A Server (Port 8000 + Webhook 9000)
+uv run mail-agent a2a
+
+# Start UI Server (Port 8080)
+uv run ui-server
+
+# Access Web UI
+open http://localhost:8080
+
+# CLI mode (one-off task)
+uv run mail-agent run "send mail to chef@example.com asking 20 recipes in csv"
 ```
 
-The server will start with:
-- SMTP on `localhost:1025`
-- REST API on `0.0.0.0:8025`
-- Swagger UI at `http://localhost:8025/docs`
+## Configuration
 
-### Configuration
+Configure via `.env` file. See `.env.example` for all options.
 
-Configure via environment variables with the `MOCK_SMTP_` prefix:
+### Required Configuration
 
 ```bash
-# Example .env file
-MOCK_SMTP_SMTP_HOST=localhost
+# LLM Provider (choose one)
+MAIL_AGENT_LLM_PROVIDER=gemini  # or "azure-openai"
+
+# Google Gemini
+MAIL_AGENT_GEMINI_API_KEY=your-gemini-api-key
+MAIL_AGENT_GEMINI_MODEL=gemini-2.5-flash
+
+# OR Azure OpenAI
+# MAIL_AGENT_AZURE_OPENAI_API_KEY=your-key
+# MAIL_AGENT_AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
+# MAIL_AGENT_AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4
+```
+
+### Optional Configuration
+
+```bash
+# Mock SMTP
 MOCK_SMTP_SMTP_PORT=1025
-MOCK_SMTP_API_HOST=0.0.0.0
 MOCK_SMTP_API_PORT=8025
-MOCK_SMTP_MAX_EMAILS_PER_INBOX=1000
-MOCK_SMTP_MAX_ATTACHMENT_SIZE_MB=10
-MOCK_SMTP_WEBHOOK_TIMEOUT_SECONDS=10.0
-MOCK_SMTP_WEBHOOK_MAX_RETRIES=3
-MOCK_SMTP_LOG_LEVEL=INFO
+
+# Mail Agent
+MAIL_AGENT_AGENT_EMAIL=info-agent@gmail.com
+MAIL_AGENT_MAX_ATTEMPTS=5
+
+# UI Server
+UI_PORT=8080
+UI_DEFAULT_INBOX_EMAIL=info-agent@gmail.com
 ```
 
-## Usage Examples
+## Usage
 
-### Sending Emails via SMTP
+### Web UI (Recommended)
+
+1. Start all servers (see Running section)
+2. Open http://localhost:8080
+3. **Send Request**: Submit task instruction
+4. **Dashboard**: Monitor task progress
+5. **Inbox**: View emails and replies
+
+### CLI Mode
+
+```bash
+# Execute task
+uv run mail-agent run "send mail to data@example.com asking list of 50 cities with population in csv"
+
+# Check configuration
+uv run mail-agent config
+
+# Health check
+uv run mail-agent health
+```
+
+### A2A Protocol
 
 ```python
-import smtplib
-from email.message import EmailMessage
+import requests
 
-msg = EmailMessage()
-msg['Subject'] = 'Test Email'
-msg['From'] = 'sender@example.com'
-msg['To'] = 'recipient@example.com'
-msg.set_content('This is a test email.')
+# Execute task
+response = requests.post(
+    "http://localhost:8000/jsonrpc",
+    json={
+        "jsonrpc": "2.0",
+        "method": "tasks.execute",
+        "params": {"instruction": "send mail to raj@gmail.com asking 10 recipes in csv"},
+        "id": 1
+    }
+)
 
-with smtplib.SMTP('localhost', 1025) as smtp:
-    smtp.send_message(msg)
+task_id = response.json()["result"]["task_id"]
+
+# Check status
+status = requests.get(f"http://localhost:8000/api/tasks/{task_id}")
+
+# Stream progress (SSE)
+import sseclient
+progress_stream = sseclient.SSEClient(f"http://localhost:8000/api/tasks/{task_id}/progress")
+for event in progress_stream:
+    print(event.data)
 ```
 
-### Using the REST API
+### Simulating POC Replies
 
 ```bash
-# List all inboxes
+# Reply with CSV attachment
+uv run python scripts/poc_reply_simulator.py \
+  --from "raj@gmail.com" \
+  --to "info-agent@gmail.com" \
+  --subject "Re: Request" \
+  --body "Here's the data you requested." \
+  --attachment ./test_data/sample_recipes.csv
+```
+
+## API Endpoints
+
+### Mock SMTP Server (Port 8025)
+
+```bash
+# Health check
+curl http://localhost:8025/api/health
+
+# List inboxes
 curl http://localhost:8025/api/inboxes
 
-# Get emails for a specific inbox
-curl http://localhost:8025/api/inboxes/recipient@example.com
+# Get inbox emails
+curl http://localhost:8025/api/inboxes/info-agent@gmail.com/emails
 
-# Get a specific email
-curl http://localhost:8025/api/inboxes/recipient@example.com/emails/{email_id}
+# Get email details
+curl http://localhost:8025/api/emails/{email_id}
 
-# Send an email directly (bypass SMTP)
+# Send email
 curl -X POST http://localhost:8025/api/send \
   -H "Content-Type: application/json" \
   -d '{
     "from_address": "sender@example.com",
     "to_addresses": ["recipient@example.com"],
-    "subject": "Test Email",
-    "body_text": "This is a test email."
+    "subject": "Test",
+    "body_text": "Hello"
   }'
 
-# Register a webhook
+# Register webhook
 curl -X POST http://localhost:8025/api/webhooks \
   -H "Content-Type: application/json" \
-  -d '{
-    "url": "http://localhost:9000/webhook",
-    "inbox_filter": null
-  }'
+  -d '{"url": "http://localhost:9000/webhook/email-received"}'
 
-# List webhooks
-curl http://localhost:8025/api/webhooks
-
-# Clear all emails
-curl -X DELETE http://localhost:8025/api/clear
-
-# Health check
-curl http://localhost:8025/api/health
+# Swagger UI
+open http://localhost:8025/docs
 ```
 
-### Webhook Payload Example
+### Mail Agent A2A Server (Port 8000)
 
-When an email arrives, registered webhooks receive:
+```bash
+# Agent card (RFC 8615)
+curl http://localhost:8000/.well-known/agent.json
 
-```json
-{
-  "event": "email.received",
-  "email_id": "550e8400-e29b-41d4-a716-446655440000",
-  "from": "sender@example.com",
-  "to": ["recipient@example.com"],
-  "subject": "Test Email",
-  "has_attachments": false,
-  "attachment_count": 0,
-  "received_at": "2025-12-14T10:30:00.000000",
-  "body_preview": "This is a test email..."
-}
+# List tasks
+curl http://localhost:8000/api/tasks
+
+# Get task status
+curl http://localhost:8000/api/tasks/{task_id}
+
+# Stream progress (SSE)
+curl -N http://localhost:8000/api/tasks/{task_id}/progress
 ```
 
-## API Endpoints
+## Architecture
 
-### Inboxes
+### Four-Server System
 
-- `GET /api/inboxes` - List all inboxes
-- `GET /api/inboxes/{email}` - Get emails for an inbox
-- `DELETE /api/inboxes/{email}` - Clear an inbox
+1. **Mock SMTP Server** (Ports 1025 SMTP, 8025 API)
+   - SMTP protocol + REST API
+   - In-memory email storage
+   - Webhook notifications for email arrivals
 
-### Emails
+2. **Mail Agent A2A Server** (Port 8000)
+   - JSON-RPC 2.0 endpoint (A2A protocol)
+   - LangGraph agent execution
+   - Task management with persistence
+   - Real-time progress streaming (SSE)
 
-- `GET /api/inboxes/{email}/emails/{email_id}` - Get specific email
-- `DELETE /api/inboxes/{email}/emails/{email_id}` - Delete email
-- `DELETE /api/clear` - Clear all inboxes
+3. **Mail Agent Webhook Server** (Port 9000)
+   - Email arrival notifications
+   - Task resumption triggers
+   - Async webhook processing
 
-### Send
+4. **UI Server** (Port 8080)
+   - HTMX + Tailwind CSS web interface
+   - Task submission and monitoring
+   - Inbox management
+   - Live progress updates via SSE
 
-- `POST /api/send` - Send email directly
+### Data Flow
 
-### Webhooks
+```
+┌─────────┐  HTTP   ┌──────────┐  JSON-RPC  ┌──────────────┐
+│ Browser │◄───────►│ UI Server│◄──────────►│ A2A Server   │
+└─────────┘  SSE    └──────────┘            │ (Port 8000)  │
+                          │                 └───────┬──────┘
+                          │ REST API                │ REST
+                          ▼                         ▼
+                    ┌────────────┐          ┌──────────────┐
+                    │ Mock SMTP  │──────────►│ Webhook      │
+                    │ (8025/1025)│  HTTP     │ (Port 9000)  │
+                    └────────────┘  POST     └──────────────┘
+```
 
-- `POST /api/webhooks` - Register webhook
-- `GET /api/webhooks` - List webhooks
-- `GET /api/webhooks/{webhook_id}` - Get webhook
-- `DELETE /api/webhooks/{webhook_id}` - Unregister webhook
+### Mail Agent Workflow
 
-### Health
-
-- `GET /api/health` - Health check
+```
+User Instruction
+     ↓
+Parse (extract POC emails + requirements)
+     ↓
+Compose (LLM generates email)
+     ↓
+Send (via Mock SMTP)
+     ↓
+Wait for Reply (interrupt, webhook-triggered resume)
+     ↓ [Email arrives → Webhook → Resume]
+Fetch (retrieve email)
+     ↓
+Extract (parse CSV/Excel attachments)
+     ↓
+Validate (LLM checks against requirements)
+     ↓
+Decide (retry up to 5 times or complete)
+```
 
 ## Development
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# All tests
 pytest
 
-# Run with coverage
-pytest --cov=src/mock_smtp --cov-report=html
+# With coverage
+pytest --cov=src --cov-report=html
 
-# Run specific test file
-pytest tests/test_models.py
-
-# Run with verbose output
-pytest -v
+# Specific suite
+pytest tests/test_mail_agent/
+pytest tests/test_ui/
 ```
 
 ### Project Structure
 
 ```
-mock-smtp-server/
+info-agent/
 ├── src/
-│   └── mock_smtp/
-│       ├── __init__.py
-│       ├── main.py              # Entrypoint
-│       ├── config.py            # Settings
-│       ├── store/
-│       │   ├── models.py        # Data models
-│       │   └── inbox_store.py   # Storage
-│       ├── webhooks/
-│       │   ├── registry.py      # Webhook storage
-│       │   └── dispatcher.py    # HTTP POST
-│       ├── smtp/
-│       │   ├── handler.py       # SMTP handler
-│       │   └── server.py        # SMTP server
-│       └── api/
-│           ├── inbox_routes.py
-│           ├── email_routes.py
-│           ├── send_routes.py
-│           ├── webhook_routes.py
-│           └── router.py
-├── tests/
-│   ├── conftest.py
-│   ├── test_models.py
-│   ├── test_inbox_store.py
-│   └── test_api_inboxes.py
-├── pyproject.toml
-├── README.md
-└── .gitignore
+│   ├── mock_smtp/        # Mock SMTP server
+│   ├── mail_agent/       # LangGraph mail agent
+│   └── ui/               # Web UI (HTMX + Tailwind)
+├── tests/                # Test suites
+├── scripts/              # Utilities (A2A client, POC simulator)
+├── .env.example          # Environment template
+├── pyproject.toml        # Package config
+├── README.md             # This file
+└── CLAUDE.md             # Developer documentation
 ```
 
-## Design Decisions
+## Troubleshooting
 
-### Why In-Memory Storage?
+### Mock SMTP not responding
+```bash
+curl http://localhost:8025/api/health
+uv run mock-smtp  # Check startup logs
+```
 
-This is a **testing tool**, not a production email server. In-memory storage ensures:
-- Fast operation
-- No persistence concerns
-- Clean state on restart
-- Simple deployment
+### Mail Agent connection errors
+```bash
+curl http://localhost:8025/api/health  # Verify Mock SMTP is running
+uv run mail-agent config               # Check configuration
+```
 
-### Why No Authentication?
+### LLM API errors
+```bash
+echo $MAIL_AGENT_GEMINI_API_KEY        # Verify API key is set
+uv run mail-agent config               # Validate configuration
+```
 
-For testing environments, authentication adds unnecessary complexity. The server is designed to run locally or in isolated test environments.
-
-### Attachment Size Limits
-
-Default 10MB limit prevents memory exhaustion. Adjust via `MOCK_SMTP_MAX_ATTACHMENT_SIZE_MB`.
-
-### Webhook Behavior
-
-- Webhooks are dispatched **asynchronously** (fire-and-forget)
-- Failed webhooks are logged but **not persisted**
-- Retries use exponential backoff (configurable)
-- Timeouts prevent hanging requests
+### Webhook not received
+```bash
+curl http://localhost:8025/api/webhooks  # Check webhook registration
+# Ensure Mail Agent is running (starts webhook server)
+```
 
 ## Limitations
 
-- **Ephemeral storage** - All data lost on restart
-- **No TLS/SSL** - Plain text only
-- **No authentication** - Open relay
-- **Limited SMTP commands** - Basic implementation
-- **No queue persistence** - Webhooks not retried after restart
+### Mock SMTP
+- No persistent storage (in-memory only)
+- No TLS/SSL
+- No authentication
+- No email queue persistence
+
+### Mail Agent
+- Requires Mock SMTP server
+- LLM API key required
+- CSV/Excel attachments only
+- Max 5 retry attempts per POC
+- English language only
 
 ## Use Cases
 
-- Testing email sending in applications
-- Local development without real SMTP servers
-- Integration testing for email workflows
-- Webhook testing and debugging
-- Email UI/UX development
+- **Automated Data Collection** - Request structured data via email
+- **POC Follow-ups** - Multi-turn conversations with validation
+- **Email Workflow Testing** - Local SMTP server for development
+- **Agent Prototyping** - A2A protocol experimentation
 
 ## License
 
@@ -266,6 +364,29 @@ MIT
 
 Contributions welcome! Please ensure:
 - All tests pass (`pytest`)
-- Code follows project structure guidelines
 - Files stay under 800 lines
-- Comprehensive logging is maintained
+- Environment variables documented in `.env.example`
+- See `CLAUDE.md` for developer guidelines
+
+## Documentation
+
+- **README.md** (this file) - User documentation
+- **CLAUDE.md** - Developer quick reference
+
+# Execution steps:
+## mock smtp
+uv run mock-smtp
+
+## mail agent
+uv run mail-agent a2a
+uv run mail-agent run "send mail to raj@gmail.com asking 10 food recipes in csv file"
+
+# ui
+uv run ui-server
+
+## a2aclient
+python scripts/a2a_client.py info
+uv run python scripts/a2a_client.py interactive
+
+## reply simulator
+uv run python scripts/poc_reply_simulator.py --from "raj@gmail.com" --to "info-agent@gmail.com" --subject "Re: Request: 10 Actor names" --body "Please find attached." --attachment ./test_data/sample_actors.csv

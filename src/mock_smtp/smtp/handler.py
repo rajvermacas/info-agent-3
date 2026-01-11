@@ -182,22 +182,36 @@ class SMTPHandler:
         attachments = []
 
         if msg.is_multipart():
+            logger.debug("Processing multipart message")
             for part in msg.walk():
                 content_type = part.get_content_type()
                 content_disposition = str(part.get("Content-Disposition", ""))
+                filename = part.get_filename()
+
+                logger.debug(
+                    f"Processing MIME part: content_type={content_type}, "
+                    f"disposition='{content_disposition}', filename={filename}"
+                )
 
                 # Handle text/plain
                 if content_type == "text/plain" and "attachment" not in content_disposition:
                     body_text = part.get_content()
+                    logger.debug(f"Found text/plain body: {len(str(body_text)) if body_text else 0} chars")
 
                 # Handle text/html
                 elif content_type == "text/html" and "attachment" not in content_disposition:
                     body_html = part.get_content()
+                    logger.debug(f"Found text/html body: {len(str(body_html)) if body_html else 0} chars")
 
                 # Handle attachments
-                elif "attachment" in content_disposition or part.get_filename():
-                    filename = part.get_filename() or "unnamed"
+                elif "attachment" in content_disposition or filename:
+                    attachment_filename = filename or "unnamed"
                     content = part.get_content()
+
+                    logger.info(
+                        f"Found attachment: filename={attachment_filename}, "
+                        f"content_type={content_type}"
+                    )
 
                     # Convert content to bytes if needed
                     if isinstance(content, str):
@@ -205,20 +219,31 @@ class SMTPHandler:
                     else:
                         content_bytes = content
 
+                    logger.debug(f"Attachment content size: {len(content_bytes)} bytes")
+
                     # Check attachment size
                     if len(content_bytes) > self.max_attachment_size:
                         logger.warning(
-                            f"Attachment '{filename}' exceeds max size "
+                            f"Attachment '{attachment_filename}' exceeds max size "
                             f"({len(content_bytes)} > {self.max_attachment_size})"
                         )
                         continue
 
                     attachment = Attachment.from_bytes(
-                        filename=filename,
+                        filename=attachment_filename,
                         content_type=content_type,
                         content=content_bytes
                     )
                     attachments.append(attachment)
+                    logger.info(
+                        f"Added attachment to email: {attachment_filename} "
+                        f"({len(content_bytes)} bytes)"
+                    )
+                else:
+                    logger.debug(
+                        f"Skipping MIME part: content_type={content_type}, "
+                        f"not an attachment"
+                    )
 
         else:
             # Single-part message

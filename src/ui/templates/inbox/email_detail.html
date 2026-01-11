@@ -1,0 +1,114 @@
+<!-- Email Detail Panel -->
+<div class="bg-white shadow rounded-lg">
+    <div class="px-4 py-5 sm:p-6">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-medium leading-6 text-gray-900">Email Detail</h3>
+            <button
+                type="button"
+                onclick="document.getElementById('email-detail-container').classList.add('hidden')"
+                class="text-gray-400 hover:text-gray-500"
+            >
+                <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+        </div>
+
+        <!-- Email Metadata -->
+        <div class="border-b border-gray-200 pb-4 mb-4">
+            <dl class="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">From</dt>
+                    <dd class="text-sm text-gray-900">{{ email.from_address }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">To</dt>
+                    <dd class="text-sm text-gray-900">{{ email.to_addresses | join(", ") }}</dd>
+                </div>
+                <div class="sm:col-span-2">
+                    <dt class="text-sm font-medium text-gray-500">Subject</dt>
+                    <dd class="text-sm text-gray-900 font-semibold">{{ email.subject }}</dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Received</dt>
+                    <dd class="text-sm text-gray-900">
+                        {% if email.received_at %}
+                        {{ email.received_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                        {% else %}
+                        Unknown
+                        {% endif %}
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-sm font-medium text-gray-500">Email ID</dt>
+                    <dd class="text-sm text-gray-500 font-mono text-xs">{{ email.id }}</dd>
+                </div>
+            </dl>
+        </div>
+
+        <!-- Email Body -->
+        <div class="mb-4">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Body</h4>
+            <div class="bg-gray-50 rounded-md p-4 text-sm text-gray-800 whitespace-pre-wrap">
+                {% if email.body_text %}
+                {{ email.body_text }}
+                {% elif email.body_html %}
+                <div class="prose prose-sm max-w-none">{{ email.body_html | safe }}</div>
+                {% else %}
+                <em class="text-gray-500">(No body content)</em>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Attachments -->
+        {% if email.attachments %}
+        <div class="mb-4">
+            <h4 class="text-sm font-medium text-gray-700 mb-2">Attachments ({{ email.attachments | length }})</h4>
+            <ul class="divide-y divide-gray-200 border border-gray-200 rounded-md">
+                {% for attachment in email.attachments %}
+                <li class="flex items-center justify-between py-3 pl-3 pr-4 text-sm">
+                    <div class="flex items-center flex-1 min-w-0">
+                        <svg class="h-5 w-5 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                        </svg>
+                        <span class="ml-2 flex-1 truncate">{{ attachment.filename }}</span>
+                        <span class="ml-2 flex-shrink-0 text-gray-400">
+                            {{ (attachment.size_bytes / 1024) | round(1) }} KB
+                        </span>
+                    </div>
+                    <div class="ml-4 flex-shrink-0">
+                        <a href="/api/inbox/{{ inbox_address }}/emails/{{ email.id }}/attachment/{{ loop.index0 }}"
+                           class="font-medium text-indigo-600 hover:text-indigo-500"
+                           download="{{ attachment.filename }}">
+                            Download
+                        </a>
+                    </div>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <!-- Actions -->
+        <div class="flex items-center space-x-4">
+            <button
+                type="button"
+                onclick="showReplyForm('{{ inbox_address }}', '{{ email.id }}')"
+                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+                <svg class="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+                </svg>
+                Reply
+            </button>
+            <button
+                type="button"
+                onclick="document.getElementById('email-detail-container').classList.add('hidden')"
+                class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+                Close
+            </button>
+        </div>
+    </div>
+</div>

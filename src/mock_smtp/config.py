@@ -91,6 +91,7 @@ class Settings(BaseSettings):
         env_prefix="MOCK_SMTP_",
         case_sensitive=False,
         validate_default=True,
+        extra="ignore",
     )
 
     @field_validator("log_level")

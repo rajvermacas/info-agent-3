@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Inbox - Mail Agent UI{% endblock %}
+
+{% block page_title %}Inbox{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Inbox Selector -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <div class="flex items-center justify-between">
+                <div class="flex-1">
+                    <label for="inbox-select" class="block text-sm font-medium text-gray-700 mb-2">
+                        Select Inbox
+                    </label>
+                    <div class="flex items-center space-x-4">
+                        <input
+                            type="email"
+                            id="inbox-select"
+                            value="{{ default_inbox }}"
+                            placeholder="Enter email address"
+                            class="flex-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border"
+                        >
+                        <button
+                            type="button"
+                            onclick="loadInbox()"
+                            class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        >
+                            Load Inbox
+                        </button>
+                    </div>
+                </div>
+                <div class="ml-4 self-end">
+                    <button
+                        type="button"
+                        hx-get="/api/inbox/list"
+                        hx-target="#inbox-list-container"
+                        hx-swap="innerHTML"
+                        class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    >
+                        <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+                        </svg>
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Available Inboxes -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">Available Inboxes</h3>
+            <div id="inbox-list-container"
+                 hx-get="/api/inbox/list"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="text-center py-4">
+                    <div class="animate-spin h-6 w-6 border-2 border-indigo-600 rounded-full border-t-transparent mx-auto"></div>
+                    <p class="text-sm text-gray-500 mt-2">Loading inboxes...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Email List -->
+    <div class="bg-white shadow rounded-lg">
+        <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">Emails</h3>
+            <div id="email-list-container"
+                 hx-get="/api/inbox/{{ default_inbox }}/emails"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="text-center py-4">
+                    <div class="animate-spin h-6 w-6 border-2 border-indigo-600 rounded-full border-t-transparent mx-auto"></div>
+                    <p class="text-sm text-gray-500 mt-2">Loading emails...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Email Detail Container -->
+    <div id="email-detail-container" class="hidden">
+        <!-- Email detail will be loaded here -->
+    </div>
+
+    <!-- Reply Form Container -->
+    <div id="reply-form-container" class="hidden">
+        <!-- Reply form will be loaded here -->
+    </div>
+</div>
+
+<script>
+function loadInbox() {
+    const email = document.getElementById('inbox-select').value;
+    if (email) {
+        htmx.ajax('GET', '/api/inbox/' + encodeURIComponent(email) + '/emails', '#email-list-container');
+    }
+}
+
+function showEmailDetail(inboxAddress, emailId) {
+    const container = document.getElementById('email-detail-container');
+    container.classList.remove('hidden');
+    htmx.ajax('GET', '/api/inbox/' + encodeURIComponent(inboxAddress) + '/emails/' + emailId, container);
+}
+
+function showReplyForm(inboxAddress, emailId) {
+    const container = document.getElementById('reply-form-container');
+    container.classList.remove('hidden');
+    htmx.ajax('GET', '/api/inbox/' + encodeURIComponent(inboxAddress) + '/emails/' + emailId + '/reply-form', container);
+}
+
+function hideReplyForm() {
+    const container = document.getElementById('reply-form-container');
+    container.classList.add('hidden');
+    container.innerHTML = '';
+}
+
+// Allow Enter key to load inbox
+document.getElementById('inbox-select').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') {
+        loadInbox();
+    }
+});
+</script>
+{% endblock %}

@@ -11,8 +11,6 @@ from mock_smtp.webhooks.registry import WebhookRegistry, WebhookRegistration
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
-
 
 class WebhookCreateRequest(BaseModel):
     """Request model for creating a webhook."""
@@ -37,6 +35,8 @@ def create_webhook_router(webhook_registry: WebhookRegistry) -> APIRouter:
     Returns:
         Configured APIRouter
     """
+    # Create fresh router each time to avoid closure issues with reused singletons
+    router = APIRouter()
 
     @router.post(
         "/webhooks",

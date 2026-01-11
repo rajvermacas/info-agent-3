@@ -10,8 +10,6 @@ from mock_smtp.store.models import Email
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
-
 
 def create_email_router(inbox_store: InboxStore) -> APIRouter:
     """
@@ -23,6 +21,8 @@ def create_email_router(inbox_store: InboxStore) -> APIRouter:
     Returns:
         Configured APIRouter
     """
+    # Create fresh router each time to avoid closure issues with reused singletons
+    router = APIRouter()
 
     @router.get(
         "/inboxes/{email_address}/emails/{email_id}",
@@ -58,7 +58,13 @@ def create_email_router(inbox_store: InboxStore) -> APIRouter:
                 detail=f"Email not found in inbox '{email_address}'"
             )
 
-        logger.debug(f"Returning email {email_id}")
+        logger.info(
+            f"Returning email {email_id} with {len(email.attachments)} attachments"
+        )
+        for att in email.attachments:
+            logger.debug(
+                f"  Attachment: {att.filename} ({att.content_type}, {att.size_bytes} bytes)"
+            )
         return email
 
     @router.delete(

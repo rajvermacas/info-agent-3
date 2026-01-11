@@ -1,0 +1,46 @@
+{% if inboxes %}
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    {% for inbox in inboxes %}
+    <div class="relative rounded-lg border border-gray-300 bg-white px-4 py-3 shadow-sm hover:border-indigo-500 hover:ring-1 hover:ring-indigo-500 cursor-pointer"
+         onclick="document.getElementById('inbox-select').value = '{{ inbox.email_address }}'; loadInbox();">
+        <div class="flex items-center space-x-3">
+            <div class="flex-shrink-0">
+                <svg class="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+                </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-gray-900 truncate">
+                    {{ inbox.email_address }}
+                </p>
+                <p class="text-sm text-gray-500">
+                    {{ inbox.email_count }} email{% if inbox.email_count != 1 %}s{% endif %}
+                </p>
+            </div>
+            {% if inbox.email_count > 0 %}
+            <div class="flex-shrink-0">
+                <span class="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-800">
+                    {{ inbox.email_count }}
+                </span>
+            </div>
+            {% endif %}
+        </div>
+        {% if inbox.last_email_at %}
+        <p class="mt-1 text-xs text-gray-400 pl-9">
+            Last: {{ inbox.last_email_at.strftime('%Y-%m-%d %H:%M') }}
+        </p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center py-6">
+    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+    </svg>
+    <h3 class="mt-2 text-sm font-medium text-gray-900">No inboxes found</h3>
+    <p class="mt-1 text-sm text-gray-500">
+        No emails have been received yet. Send a request to get started.
+    </p>
+</div>
+{% endif %}
