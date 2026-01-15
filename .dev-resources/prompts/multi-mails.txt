@@ -1,3 +1,104 @@
 Right now I cannot ask the mail agent to go and send mails to more than one point of contact and get some subset of data from 1 contact and another remaining from other contact. and then finally validate if data from both the contacts constitute towards the final correct data or not.
 
 I want to implement this feature.
+---------------------------------
+
+Q1: Data Partitioning Strategy
+
+  How should the agent know which POC provides which data?
+
+  Options:
+  - (A) User explicitly specifies - "Ask raj@gmail.com for recipes, ask priya@gmail.com for ingredients" (Default: this)
+    Even though user explicitly specifies but still agent should infer from the context based on POC roles/descriptions if provided
+-------------------------------
+
+Q2: POC Communication Pattern
+
+  Should the agent contact POCs in parallel or sequentially?
+
+  Options:
+  - It can be parallel or even it can happen that 1st POC's response will have some data on which the mail has to be framed for the 2nd Point of contact. All these details will be provided in the request by the end user.
+---------------------------------
+
+Q3: Partial Success Handling
+
+  What happens if only some POCs respond successfully?
+
+  Options:
+  - (C) Retry failed POCs to provide correct data
+-----------------------------------
+
+Q4: Cross-POC Validation
+
+  How should validation work with aggregated data?
+
+  Options:
+  - (B) Per-POC validation + final aggregation and validation - Validate each POC's contribution, then validate combined
+-----------------------------------
+
+ Q5: Retry Scope
+
+  When validation fails, what should retry?
+
+  Options:
+  - (A) Only the POC with missing/invalid data - Targeted retry (Default: this)
+-----------------------------------
+
+Q6: Redirect Handling in Multi-POC
+
+  You already have redirect handling. How should it work with multiple POCs?
+
+  Options:
+  - (A) Per-POC redirect - If POC1 redirects to POC3, follow it independently (Default: this)
+-----------------------------------
+
+Questions for me to Consider
+
+  1. Timeout handling: What if one POC never responds? Should there be a deadline after which the agent proceeds with available data? - No deadline for now but in future it should be.
+  2. Conflict resolution: What if two POCs provide conflicting data for the same field? (e.g., both send "recipes" but different content) - Agent should be able to decide and reiterate by sending the mails to correct stakeholders for correct data
+  3. Success acknowledgment: Should the agent send a thank-you to ALL POCs or only those who contributed valid data? - only to those who provide valid data. for the incorrect ones. Chase them for correct data.
+  4. Progress visibility: How should the UI display multi-POC progress? Per-POC status or aggregate? - both
+  5. Retry budget: Currently MAX_ATTEMPTS=5. Should this be per-POC or total across all POCs? - MAX_ATTEMPTS should be equal to 15 and each should be for each POC.
+-----------------------------------
+
+Answers to Follow-up Questions
+
+  Q7: Dependency Expression Format
+
+  How should the user express POC dependencies?
+
+  Options:
+  - User will provide the context in Natural language like LLM parses "first ask X, then using that data ask Y" (Default: this - simpler UX)
+        But LLM infers all dependencies from context
+
+  ---
+  Q8: Dynamic POC Discovery
+
+  You mentioned "ask raj for vendor list, then ask each vendor for pricing". This means:
+  - Number of POCs is dynamic (unknown until POC1 responds)
+  - Agent discovers new POCs at runtime
+
+  Should we support this?
+  - (A) Yes - Agent can spawn new POC flows based on response data (Default: this - powerful)
+
+  ---
+  Q9: Per-POC Success Criteria
+
+  With per-POC validation, how are individual success criteria defined?
+
+  Options:
+  - (A) LLM infers from the partitioned request (Default: this)
+
+  ---
+  Q10: Conflict Resolution Strategy
+
+  When two POCs provide conflicting data:
+
+  Options:
+  - (A) LLM decides + requests clarification from the POC it determines is wrong (Default: this)
+------------------------------------
+
+There should be no backwared compatibility from coding perspective. Every request should pass through the same execution flow. Its just that single poc = trivial case
+
+ UI display: I want a visual DAG diagram on the UI
+------------------------------------
