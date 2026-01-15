@@ -481,90 +481,6 @@ else
     log "⚠ pip3 not found, cannot install PyYAML"
 fi
 
-# Install MCP servers
-log ""
-log "=== STEP 4.6: Installing MCP Servers ==="
-log "Installing Claude MCP servers..."
-
-# Refresh PATH and hash table to ensure newly installed commands are found
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-hash -r  # Clear the command hash table
-
-# Try to find claude with multiple methods
-CLAUDE_FOUND=false
-CLAUDE_CMD=""
-
-# Method 1: Direct command check after PATH refresh
-if command -v claude &> /dev/null; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="claude"
-    log "Claude CLI found via command -v: $(which claude)"
-# Method 2: Check common npm global install locations
-elif [ -x "/usr/bin/claude" ]; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="/usr/bin/claude"
-    log "Claude CLI found at /usr/bin/claude"
-elif [ -x "/usr/local/bin/claude" ]; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="/usr/local/bin/claude"
-    log "Claude CLI found at /usr/local/bin/claude"
-# Method 3: Check if the npm module exists and try to use it directly
-elif [ -f "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js" ]; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-    log "Claude CLI found via node module at /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-else
-    # Last resort: wait a bit and try again
-    log "Claude not immediately found, waiting 3 seconds for environment to settle..."
-    sleep 3
-    hash -r  # Clear the command hash table
-
-    # Try one more time after wait
-    if command -v claude &> /dev/null; then
-        CLAUDE_FOUND=true
-        CLAUDE_CMD="claude"
-        log "Claude CLI found after wait: $(which claude)"
-    elif [ -f "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js" ]; then
-        CLAUDE_FOUND=true
-        CLAUDE_CMD="node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-        log "Claude npm module found after wait"
-    fi
-fi
-
-if [ "$CLAUDE_FOUND" = true ]; then
-    log "Claude CLI detected, proceeding with MCP server installation"
-    log "Using claude command: $CLAUDE_CMD"
-
-    # Install context7 MCP server
-    log "Installing context7 MCP server..."
-    log "Command: $CLAUDE_CMD mcp add context7 -s user -- npx -y @upstash/context7-mcp"
-    if $CLAUDE_CMD mcp add context7 -s user -- npx -y @upstash/context7-mcp 2>&1 | while IFS= read -r line; do log "    MCP: $line"; done; [ ${PIPESTATUS[0]} -eq 0 ]; then
-        log "  ✓ Successfully installed context7 MCP server"
-    else
-        log "  ✗ Failed to install context7 MCP server"
-    fi
-
-    # Install fetch MCP server
-    log "Installing fetch MCP server..."
-    log "Command: $CLAUDE_CMD mcp add fetch -s user -- uvx mcp-server-fetch"
-    if $CLAUDE_CMD mcp add fetch -s user -- uvx mcp-server-fetch 2>&1 | while IFS= read -r line; do log "    MCP: $line"; done; [ ${PIPESTATUS[0]} -eq 0 ]; then
-        log "  ✓ Successfully installed fetch MCP server"
-    else
-        log "  ✗ Failed to install fetch MCP server"
-    fi
-
-    log "✓ MCP server installation phase completed"
-else
-    log "Claude CLI not found after all attempts"
-    log "⚠ Claude CLI not available - MCP servers not installed"
-    log "PATH checked: $PATH"
-    log "Locations checked:"
-    log "  - command -v claude"
-    log "  - /usr/bin/claude"
-    log "  - /usr/local/bin/claude"
-    log "  - /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-fi
-
 # Clean up
 log ""
 log "=== STEP 5: Cleanup ==="
@@ -606,14 +522,6 @@ log ""
 log "  • Project templates: ~/projects/claude-code-templates/"
 log ""
 log "  • VSCode settings: ~/User/"
-log ""
-log "  • MCP Servers:"
-if [ "$CLAUDE_FOUND" = true ]; then
-    log "    - context7 MCP server: Provides library documentation access"
-    log "    - fetch MCP server: Enables web content fetching"
-else
-    log "    - MCP servers not installed (Claude CLI not available)"
-fi
 log ""
 log "Statistics:"
 log "  • Packages installed: $INSTALLED_COUNT"

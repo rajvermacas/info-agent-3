@@ -12,12 +12,13 @@ Autonomous email interaction system with Mock SMTP server, LangGraph-powered mai
 - **Multiple Inboxes** - Auto-created on first email
 
 ### Mail Agent
-- **Autonomous Workflows** - Send requests, validate responses, retry on failure
-- **LangGraph State Machine** - Parse → Compose → Send → Wait → Fetch → Validate → Decide
-- **LLM Integration** - Google Gemini or Azure OpenAI
+- **Autonomous Workflows** - Send requests, validate responses, retry on failure, handle redirects
+- **LangGraph State Machine** - Parse → Compose → Send → Wait → Fetch → Validate → Decide → Success Reply
+- **LLM Integration** - Google Gemini, Azure OpenAI, or OpenRouter
 - **Attachment Handling** - CSV and Excel parsing
 - **State Persistence** - SQLite checkpointing for resumable tasks
 - **A2A Protocol** - Google Agent-to-Agent protocol (JSON-RPC 2.0)
+- **Email Redirects** - Automatically redirects to suggested contacts when POC refers to someone else
 
 ### UI Server
 - **Web Interface** - HTMX + Tailwind CSS
@@ -70,7 +71,7 @@ Configure via `.env` file. See `.env.example` for all options.
 
 ```bash
 # LLM Provider (choose one)
-MAIL_AGENT_LLM_PROVIDER=gemini  # or "azure-openai"
+MAIL_AGENT_LLM_PROVIDER=gemini  # or "azure-openai" or "openrouter"
 
 # Google Gemini
 MAIL_AGENT_GEMINI_API_KEY=your-gemini-api-key
@@ -80,6 +81,10 @@ MAIL_AGENT_GEMINI_MODEL=gemini-2.5-flash
 # MAIL_AGENT_AZURE_OPENAI_API_KEY=your-key
 # MAIL_AGENT_AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 # MAIL_AGENT_AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4
+
+# OR OpenRouter
+# MAIL_AGENT_OPENROUTER_API_KEY=your-key
+# MAIL_AGENT_OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
 ```
 
 ### Optional Configuration
@@ -273,7 +278,12 @@ Extract (parse CSV/Excel attachments)
      ↓
 Validate (LLM checks against requirements)
      ↓
-Decide (retry up to 5 times or complete)
+Decide (success / retry up to 5 times / redirect / failure)
+     ↓
+[Success] → Compose Success Reply → Send Thank-You Email → Complete
+[Retry] → Compose followup email
+[Redirect] → Compose email to new POC
+[Failure] → Mark as failed
 ```
 
 ## Development
@@ -344,10 +354,11 @@ curl http://localhost:8025/api/webhooks  # Check webhook registration
 
 ### Mail Agent
 - Requires Mock SMTP server
-- LLM API key required
+- LLM API key required (Gemini, Azure OpenAI, or OpenRouter)
 - CSV/Excel attachments only
 - Max 5 retry attempts per POC
 - English language only
+- No multi-POC parallel processing (sequential only)
 
 ## Use Cases
 
