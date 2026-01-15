@@ -9,7 +9,7 @@
 3. **Mail Agent Webhook Server** (Port 9000) - Email notification receiver
 4. **UI Server** (Port 8080) - Web interface (HTMX + Tailwind CSS + SSE)
 
-**Tech Stack**: aiosmtpd, FastAPI, LangGraph, HTMX, Tailwind CSS, SQLite, Gemini/Azure OpenAI, SSE
+**Tech Stack**: aiosmtpd, FastAPI, LangGraph, HTMX, Tailwind CSS, SQLite, Gemini/Azure OpenAI/OpenRouter, SSE
 
 ```
 ┌─────────────────┐         ┌──────────────────────┐
@@ -67,7 +67,7 @@ pytest --cov=src --cov-report=html
 - **Send API**: `src/mock_smtp/api/send_routes.py` - REST send endpoint
 - **Agent Send**: `src/mail_agent/agent/nodes/send_email.py` - Agent send logic
 - **UI Send**: `src/ui/routes/send_request.py` - UI send form
-- **SMTP Sender**: `src/ui/services/smtp_sender.py` - Direct SMTP email sending
+- **SMTP Sender**: `src/mail_agent/tools/smtp_sender.py` - Direct SMTP email sending
 
 ### Inbox Management
 - **Storage**: `src/mock_smtp/store/inbox_store.py` - Thread-safe email store
@@ -103,15 +103,18 @@ pytest --cov=src --cov-report=html
 - **Wait Node**: `src/mail_agent/agent/nodes/wait_for_reply.py` - Interrupt + wait
 
 ### LLM & Validation
-- **Client**: `src/mail_agent/llm/client.py` - Gemini/Azure factory
+- **Client**: `src/mail_agent/llm/client.py` - Gemini/Azure/OpenRouter factory
 - **Prompts**: `src/mail_agent/llm/prompts.py` - System prompts
 - **Parse**: `src/mail_agent/agent/nodes/parse_instruction.py` - Extract POC/requirements
 - **Compose**: `src/mail_agent/agent/nodes/compose_email.py` - Generate email
 - **Validate**: `src/mail_agent/agent/nodes/validate_response.py` - Check response
+- **Success Reply**: `src/mail_agent/agent/nodes/compose_success_reply.py` - Generate acknowledgment
+- **Send Success**: `src/mail_agent/agent/nodes/send_success_reply.py` - Send acknowledgment
 
-### Attachments
+### Attachments & Email Redirects
 - **Parser**: `src/mail_agent/tools/attachment_parser.py` - CSV/Excel parsing
 - **Extract**: `src/mail_agent/agent/nodes/extract_content.py` - Extraction node
+- **Redirect Handler**: `src/mail_agent/agent/nodes/handle_redirect.py` - POC redirect logic
 
 ### Configuration
 - **Mock SMTP**: `src/mock_smtp/config.py` - `MOCK_SMTP_*` vars
@@ -161,31 +164,24 @@ pytest --cov=src --cov-report=html
 - `src/mail_agent/agent/nodes/wait_for_reply.py` - Interruptible wait
 
 ### 6. LLM-Powered Content Generation & Validation
-**Description**: Gemini/Azure OpenAI for email composition and response validation.
-**Files**:
-- `src/mail_agent/llm/client.py` - LLM client factory
-- `src/mail_agent/agent/nodes/compose_email.py` - Email generation
-- `src/mail_agent/agent/nodes/validate_response.py` - Response validation
+**Description**: Gemini/Azure OpenAI/OpenRouter for email composition and response validation.
+**Files**: `src/mail_agent/llm/client.py`, `src/mail_agent/agent/nodes/compose_email.py`, `src/mail_agent/agent/nodes/validate_response.py`, `src/mail_agent/agent/nodes/compose_success_reply.py`
 
 ### 7. Attachment Processing
 **Description**: Parse CSV and Excel attachments from POC emails.
-**Files**:
-- `src/mail_agent/tools/attachment_parser.py` - CSV/Excel parser
-- `src/mail_agent/agent/nodes/extract_content.py` - Content extraction
+**Files**: `src/mail_agent/tools/attachment_parser.py`, `src/mail_agent/agent/nodes/extract_content.py`
 
-### 8. Web UI (HTMX + Tailwind)
+### 8. Email Redirect Handling
+**Description**: When POC suggests alternate contact, agent automatically redirects request.
+**Files**: `src/mail_agent/agent/nodes/handle_redirect.py`, `src/mail_agent/agent/nodes/validate_response.py`
+
+### 9. Web UI (HTMX + Tailwind)
 **Description**: Interactive web interface for task submission and monitoring.
-**Files**:
-- `src/ui/routes/` - All UI routes
-- `src/ui/templates/` - Jinja2 templates
-- `src/ui/static/css/` - Tailwind CSS
+**Files**: `src/ui/routes/*`, `src/ui/templates/*`, `src/ui/static/css/*`
 
-### 9. Task Management & Persistence
+### 10. Task Management & Persistence
 **Description**: SQLite-backed task storage with state checkpointing.
-**Files**:
-- `src/mail_agent/task_manager/manager.py` - Task manager
-- `src/mail_agent/persistence/task_store.py` - Task storage
-- `src/mail_agent/persistence/checkpointer.py` - Checkpoint storage
+**Files**: `src/mail_agent/task_manager/manager.py`, `src/mail_agent/persistence/task_store.py`, `src/mail_agent/persistence/checkpointer.py`
 
 ---
 
@@ -328,8 +324,23 @@ User Instruction
 └─────────┬──────────┘
           ↓
 ┌────────────────────┐
-│   decide_next      │  Retry (max 5) or complete
-└────────────────────┘
+│   decide_next      │  Success / Retry (max 5) / Redirect / Failure
+└────────┬───────────┘
+         ├─[Success]──────────────────────┐
+         │                                 ↓
+         │                    ┌────────────────────────┐
+         │                    │ compose_success_reply  │  LLM generates acknowledgment
+         │                    └────────────┬───────────┘
+         │                                 ↓
+         │                    ┌────────────────────────┐
+         │                    │  send_success_reply    │  Send thank-you email
+         │                    └────────────────────────┘
+         │
+         ├─[Redirect]─────► handle_redirect ──► compose_email (new POC)
+         │
+         ├─[Retry]───────────► compose_email (followup)
+         │
+         └─[Failure]─────────► END
 ```
 
 **Graph File**: `src/mail_agent/agent/graph.py`
@@ -340,7 +351,7 @@ User Instruction
 ## Directory Index
 
 ```
-/workspaces/info-agent-3/
+info-agent-3-docker/
 ├── src/
 │   ├── mock_smtp/              # Mock SMTP Server
 │   │   ├── main.py             # Entry point
@@ -375,12 +386,16 @@ User Instruction
 │   │   │       ├── fetch_email.py
 │   │   │       ├── extract_content.py
 │   │   │       ├── validate_response.py
-│   │   │       └── decide_next.py
+│   │   │       ├── decide_next.py
+│   │   │       ├── handle_redirect.py
+│   │   │       ├── compose_success_reply.py
+│   │   │       └── send_success_reply.py
 │   │   ├── llm/                # LLM
-│   │   │   ├── client.py       # Gemini/Azure factory
+│   │   │   ├── client.py       # Gemini/Azure/OpenRouter factory
 │   │   │   └── prompts.py      # System prompts
 │   │   ├── tools/              # Tools
 │   │   │   ├── smtp_client.py  # SMTP API client
+│   │   │   ├── smtp_sender.py  # SMTP protocol sender
 │   │   │   ├── inbox_client.py # Inbox API client
 │   │   │   └── attachment_parser.py # CSV/Excel parser
 │   │   ├── webhook/            # Webhook server
@@ -429,7 +444,8 @@ User Instruction
 │   │   ├── test_a2a/           # A2A tests
 │   │   ├── test_nodes/         # Node tests
 │   │   ├── test_persistence/   # Persistence tests
-│   │   └── test_task_manager/  # Task manager tests
+│   │   ├── test_task_manager/  # Task manager tests
+│   │   └── test_tools/         # Tools tests
 │   ├── test_ui/                # UI tests
 │   └── test_*.py               # Mock SMTP tests
 │
@@ -455,13 +471,9 @@ User Instruction
 
 ### Add LangGraph Node
 1. Create `src/mail_agent/agent/nodes/my_node.py`
-2. Implement: `def my_node(state: AgentState) -> AgentState`
+2. Implement: `async def my_node(state: AgentState) -> dict[str, Any]`
 3. Import in `src/mail_agent/agent/nodes/__init__.py`
-4. Add to graph in `src/mail_agent/agent/graph.py`:
-   ```python
-   .add_node("my_node", my_node)
-   .add_edge("previous_node", "my_node")
-   ```
+4. Add to graph in `src/mail_agent/agent/graph.py`: `.add_node("my_node", my_node)`
 5. Add tests: `tests/test_mail_agent/test_nodes/test_my_node.py`
 
 ### Add LLM Prompt
@@ -535,13 +547,14 @@ MAIL_AGENT_WEBHOOK_PORT=9000
 MAIL_AGENT_WEBHOOK_PATH=/webhook/email-received
 
 # LLM
-MAIL_AGENT_LLM_PROVIDER=gemini  # or "azure-openai"
+MAIL_AGENT_LLM_PROVIDER=gemini  # or "azure-openai" or "openrouter"
 MAIL_AGENT_GEMINI_API_KEY=your-key
 MAIL_AGENT_GEMINI_MODEL=gemini-2.5-flash
 # MAIL_AGENT_AZURE_OPENAI_API_KEY=...
 # MAIL_AGENT_AZURE_OPENAI_ENDPOINT=...
 # MAIL_AGENT_AZURE_OPENAI_DEPLOYMENT_NAME=...
-# MAIL_AGENT_AZURE_OPENAI_API_VERSION=...
+# MAIL_AGENT_OPENROUTER_API_KEY=...
+# MAIL_AGENT_OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
 MAIL_AGENT_LLM_TEMPERATURE=0.0
 MAIL_AGENT_LLM_MAX_TOKENS=4096
 
