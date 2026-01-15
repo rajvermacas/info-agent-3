@@ -1,8 +1,44 @@
 """
 LangGraph State Machine - Mail Agent graph definition.
 
-Defines the complete state machine for the mail agent workflow.
-Includes support for email redirects when POC suggests another contact.
+Defines the complete state machine for the mail agent workflow with
+Multi-POC DAG-based orchestration support.
+
+Graph Architecture:
+===================
+
+```
+START
+  ↓
+parse_multi_poc_instruction
+  ↓
+build_dependency_graph
+  ↓
+orchestrate_pocs ←──────────────────────────────────────────────────────┐
+  │                                                                      │
+  ├─[execute]→ inject_poc_context → compose_email → send_email          │
+  │             → wait_for_reply (INTERRUPT) → fetch_email              │
+  │             → extract_content → validate_poc_response               │
+  │             ├─[success]→ ──────────────────────────────────────────→┤
+  │             ├─[retry]→ compose_email (followup) ───────────────────→┤
+  │             ├─[redirect]→ handle_redirect → compose_email ─────────→┤
+  │             └─[fail]→ ─────────────────────────────────────────────→┤
+  │                                                                      │
+  ├─[wait]→ wait_for_reply (INTERRUPT)                                  │
+  │           → fetch_email → extract_content → validate_poc_response   │
+  │           → (same routing as above) ───────────────────────────────→┤
+  │                                                                      │
+  ├─[aggregate]→ aggregate_poc_responses → detect_conflicts             │
+  │               ├─[conflicts]→ resolve_conflicts                      │
+  │               │               ├─[needs_retry]→ ────────────────────→┤
+  │               │               └─[resolved]→ validate_global_criteria│
+  │               └─[no_conflicts]→ validate_global_criteria            │
+  │                                 ├─[valid]→ send_multi_success_replies│
+  │                                 │           → END                    │
+  │                                 └─[not_valid]→ ────────────────────→┤
+  │                                                                      │
+  └─[fail]→ END (with error)                                            │
+```
 """
 
 import logging
@@ -10,23 +46,42 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from mail_agent.agent.state import AgentState, all_conversations_complete
-from mail_agent.agent.nodes.parse_instruction import parse_instruction
+from mail_agent.agent.state import AgentState
+from mail_agent.agent.multi_poc_state import (
+    OrchestrationAction,
+    OrchestrationDecision,
+    POCStatus,
+)
+from mail_agent.agent.multi_poc_helpers import (
+    get_poc_state,
+    get_poc_progress_summary,
+)
+
+# Import all nodes
+from mail_agent.agent.nodes.parse_multi_poc_instruction import (
+    parse_multi_poc_instruction,
+)
+from mail_agent.agent.nodes.build_dependency_graph import build_dependency_graph
+from mail_agent.agent.nodes.orchestrate_pocs import orchestrate_pocs
+from mail_agent.agent.nodes.inject_poc_context import inject_poc_context
 from mail_agent.agent.nodes.compose_email import compose_email
 from mail_agent.agent.nodes.send_email import send_email
 from mail_agent.agent.nodes.wait_for_reply import wait_for_reply
 from mail_agent.agent.nodes.fetch_email import fetch_email
 from mail_agent.agent.nodes.extract_content import extract_content
-from mail_agent.agent.nodes.validate_response import validate_response
-from mail_agent.agent.nodes.decide_next import (
-    decide_next,
-    handle_success,
-    handle_failure,
-    prepare_followup,
-)
+from mail_agent.agent.nodes.validate_poc_response import validate_poc_response
 from mail_agent.agent.nodes.handle_redirect import handle_redirect
-from mail_agent.agent.nodes.compose_success_reply import compose_success_reply
-from mail_agent.agent.nodes.send_success_reply import send_success_reply
+from mail_agent.agent.nodes.aggregate_poc_responses import aggregate_poc_responses
+from mail_agent.agent.nodes.detect_conflicts import detect_conflicts, has_conflicts
+from mail_agent.agent.nodes.resolve_conflicts import (
+    resolve_conflicts,
+    needs_conflict_retry,
+)
+from mail_agent.agent.nodes.validate_global_criteria import (
+    validate_global_criteria,
+    is_global_valid,
+)
+from mail_agent.agent.nodes.send_multi_success_replies import send_multi_success_replies
 
 
 logger = logging.getLogger(__name__)
@@ -37,54 +92,245 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def route_after_parse(state: AgentState) -> Literal["compose_email", "end"]:
-    """Route after parsing instruction."""
+def route_after_parse(state: AgentState) -> Literal["build_dependency_graph", "end"]:
+    """
+    Route after parsing multi-POC instruction.
+
+    Returns:
+        - "build_dependency_graph" if parsing succeeded
+        - "end" if parsing failed or no POCs found
+    """
     error = state.get("error")
     if error:
-        logger.debug("Routing after parse: error -> end")
+        logger.debug(f"Routing after parse: error -> end ({error})")
         return "end"
 
-    parsed_request = state.get("parsed_request")
-    if parsed_request is None:
-        logger.debug("Routing after parse: no request -> end")
+    execution_plan = state.get("execution_plan")
+    if execution_plan is None:
+        logger.debug("Routing after parse: no execution_plan -> end")
         return "end"
 
-    logger.debug("Routing after parse: -> compose_email")
-    return "compose_email"
+    logger.debug("Routing after parse: -> build_dependency_graph")
+    return "build_dependency_graph"
 
 
-def route_after_validation(
+def route_after_orchestration(
     state: AgentState,
-) -> Literal["handle_success", "handle_failure", "prepare_followup", "handle_redirect"]:
-    """Route based on validation result using decide_next logic."""
-    result = decide_next(state)
+) -> Literal["execute_poc", "wait_for_poc", "aggregate", "fail_end"]:
+    """
+    Route based on orchestration decision from orchestrate_pocs node.
 
-    if result == "success":
-        return "handle_success"
-    elif result == "failure":
-        return "handle_failure"
-    elif result == "redirect":
-        return "handle_redirect"
+    Returns:
+        - "execute_poc" to start processing a ready POC
+        - "wait_for_poc" when POCs are waiting for replies
+        - "aggregate" when all POCs are complete
+        - "fail_end" on failure or deadlock
+    """
+    decision_dict = state.get("orchestration_decision")
+    if not decision_dict:
+        logger.warning("No orchestration_decision in state, routing to fail_end")
+        return "fail_end"
+
+    decision = OrchestrationDecision.from_dict(decision_dict)
+    logger.debug(f"Routing after orchestration: action={decision.action.value}")
+
+    if decision.action == OrchestrationAction.EXECUTE:
+        return "execute_poc"
+    elif decision.action == OrchestrationAction.WAIT:
+        return "wait_for_poc"
+    elif decision.action == OrchestrationAction.AGGREGATE:
+        return "aggregate"
+    else:  # FAIL
+        return "fail_end"
+
+
+def route_after_poc_validation(
+    state: AgentState,
+) -> Literal["poc_success", "poc_retry", "poc_redirect", "poc_fail"]:
+    """
+    Route based on POC validation result.
+
+    Returns:
+        - "poc_success" if POC response is valid
+        - "poc_retry" if POC needs to retry (send followup)
+        - "poc_redirect" if POC suggests redirect
+        - "poc_fail" if POC validation failed permanently
+    """
+    # Check temporary validation flags set by validate_poc_response
+    is_valid = state.get("_poc_validation_valid", False)
+    should_retry = state.get("_poc_validation_should_retry", False)
+    should_redirect = state.get("_poc_validation_should_redirect", False)
+
+    if is_valid:
+        logger.debug("Routing after POC validation: valid -> poc_success")
+        return "poc_success"
+    elif should_redirect:
+        logger.debug("Routing after POC validation: redirect -> poc_redirect")
+        return "poc_redirect"
+    elif should_retry:
+        # Check if max attempts reached
+        current_poc_id = state.get("current_poc_id")
+        if current_poc_id:
+            try:
+                poc_state = get_poc_state(state, current_poc_id)
+                if poc_state.status == POCStatus.FAILED:
+                    logger.debug(
+                        f"Routing after POC validation: max attempts reached -> poc_fail"
+                    )
+                    return "poc_fail"
+            except (KeyError, ValueError):
+                pass
+        logger.debug("Routing after POC validation: retry -> poc_retry")
+        return "poc_retry"
     else:
-        return "prepare_followup"
+        logger.debug("Routing after POC validation: fail -> poc_fail")
+        return "poc_fail"
 
 
-def route_after_terminal(state: AgentState) -> Literal["end"]:
+def route_after_conflict_detection(
+    state: AgentState,
+) -> Literal["has_conflicts", "no_conflicts"]:
     """
-    Route after terminal state (success/failure).
+    Route based on whether conflicts were detected.
 
-    For now, we only support single POC, so always go to end.
-    For multi-POC support, this would check if other POCs need processing.
+    Returns:
+        - "has_conflicts" if there are data conflicts to resolve
+        - "no_conflicts" if no conflicts detected
     """
-    # Check if all conversations are complete
-    if all_conversations_complete(state):
-        logger.debug("All conversations complete -> end")
-        return "end"
+    if has_conflicts(state):
+        logger.debug("Routing after conflict detection: has_conflicts")
+        return "has_conflicts"
+    else:
+        logger.debug("Routing after conflict detection: no_conflicts")
+        return "no_conflicts"
 
-    # For multi-POC support (future):
-    # Would return to compose_email for next POC
-    logger.debug("Routing to end (single POC mode)")
-    return "end"
+
+def route_after_conflict_resolution(
+    state: AgentState,
+) -> Literal["needs_retry", "resolved"]:
+    """
+    Route based on conflict resolution result.
+
+    Returns:
+        - "needs_retry" if POCs need to re-provide data
+        - "resolved" if conflicts are fully resolved
+    """
+    if needs_conflict_retry(state):
+        logger.debug("Routing after conflict resolution: needs_retry")
+        return "needs_retry"
+    else:
+        logger.debug("Routing after conflict resolution: resolved")
+        return "resolved"
+
+
+def route_after_global_validation(
+    state: AgentState,
+) -> Literal["valid", "not_valid"]:
+    """
+    Route based on global validation result.
+
+    Returns:
+        - "valid" if all global criteria are met
+        - "not_valid" if criteria not satisfied (need more data)
+    """
+    if is_global_valid(state):
+        logger.debug("Routing after global validation: valid")
+        return "valid"
+    else:
+        logger.debug("Routing after global validation: not_valid")
+        return "not_valid"
+
+
+# ============================================================================
+# Passthrough Nodes (for routing purposes)
+# ============================================================================
+
+
+async def mark_poc_success(state: AgentState) -> dict[str, Any]:
+    """
+    Mark current POC as successful and return to orchestrator.
+
+    This is a passthrough node for routing - the actual status update
+    is done in validate_poc_response.
+    """
+    current_poc_id = state.get("current_poc_id")
+    logger.info(f"POC {current_poc_id} completed successfully")
+    return {
+        "current_node": "mark_poc_success",
+        "progress_messages": [f"POC {current_poc_id}: Completed successfully"],
+    }
+
+
+async def mark_poc_failed(state: AgentState) -> dict[str, Any]:
+    """
+    Mark current POC as failed and return to orchestrator.
+
+    This is a passthrough node for routing - the actual status update
+    is done in validate_poc_response.
+    """
+    current_poc_id = state.get("current_poc_id")
+    logger.warning(f"POC {current_poc_id} failed")
+    return {
+        "current_node": "mark_poc_failed",
+        "progress_messages": [f"POC {current_poc_id}: Failed"],
+    }
+
+
+async def handle_global_retry(state: AgentState) -> dict[str, Any]:
+    """
+    Handle case where global validation failed and POCs need retry.
+
+    This resets the orchestration to process POCs that need more data.
+    """
+    global_result = state.get("global_validation_result", {})
+    poc_ids_needing_retry = global_result.get("poc_ids_needing_retry", [])
+
+    logger.info(f"Global validation incomplete. POCs needing retry: {poc_ids_needing_retry}")
+
+    # Note: The actual retry logic is handled by orchestrate_pocs
+    # which will pick up POCs that need more data
+    return {
+        "current_node": "handle_global_retry",
+        "progress_messages": [
+            f"Global criteria not met. Need more data from: {', '.join(poc_ids_needing_retry)}"
+        ],
+    }
+
+
+async def finalize_success(state: AgentState) -> dict[str, Any]:
+    """
+    Finalize successful completion of multi-POC orchestration.
+    """
+    progress = get_poc_progress_summary(state)
+    logger.info(
+        f"Multi-POC orchestration complete: "
+        f"{progress['completed']} completed, {progress['failed']} failed"
+    )
+
+    return {
+        "current_node": "finalize_success",
+        "final_summary": (
+            f"Successfully completed multi-POC orchestration. "
+            f"{progress['completed']} POC(s) completed, {progress['failed']} failed."
+        ),
+        "progress_messages": ["Multi-POC orchestration completed successfully"],
+    }
+
+
+async def finalize_failure(state: AgentState) -> dict[str, Any]:
+    """
+    Finalize failed multi-POC orchestration.
+    """
+    error = state.get("error", "Unknown error")
+    progress = get_poc_progress_summary(state)
+
+    logger.error(f"Multi-POC orchestration failed: {error}")
+
+    return {
+        "current_node": "finalize_failure",
+        "final_summary": f"Multi-POC orchestration failed: {error}",
+        "progress_messages": [f"Orchestration failed: {error}"],
+    }
 
 
 # ============================================================================
@@ -94,108 +340,190 @@ def route_after_terminal(state: AgentState) -> Literal["end"]:
 
 def create_mail_agent_graph() -> StateGraph:
     """
-    Create the mail agent LangGraph state machine.
+    Create the mail agent LangGraph state machine with Multi-POC orchestration.
 
     Returns:
-        Compiled StateGraph ready for execution.
+        StateGraph ready for compilation.
 
-    Graph Structure:
-        START -> parse_instruction -> compose_email -> send_email -> wait_for_reply
-              -> fetch_email -> extract_content -> validate_response
-              -> [handle_success | handle_failure | prepare_followup | handle_redirect]
-              -> END (or loop back to compose_email for followup/redirect)
-
-    Success Flow:
-        When POC's response is validated as satisfactory:
-        validate_response -> handle_success -> compose_success_reply -> send_success_reply -> END
-
-    Redirect Flow:
-        When a POC responds with "I'm not the right contact, email xyz@abc.com":
-        validate_response -> handle_redirect -> compose_email (for new POC)
+    The graph implements a DAG-based orchestration flow:
+    1. Planning Phase: Parse instruction, build dependency graph
+    2. Execution Phase: Execute POCs respecting dependencies
+    3. Aggregation Phase: Merge data, detect/resolve conflicts
+    4. Completion Phase: Validate global criteria, send acknowledgments
     """
-    logger.info("Creating mail agent graph")
+    logger.info("Creating multi-POC mail agent graph")
 
-    # Create graph with state schema
     graph = StateGraph(AgentState)
 
     # ========================================================================
-    # Add Nodes
+    # Phase 1: Planning Nodes
     # ========================================================================
 
-    # Phase 1: Parse user instruction
-    graph.add_node("parse_instruction", parse_instruction)
+    graph.add_node("parse_multi_poc_instruction", parse_multi_poc_instruction)
+    graph.add_node("build_dependency_graph", build_dependency_graph)
 
-    # Phase 2: Compose and send email
+    # ========================================================================
+    # Phase 2: Orchestration Nodes
+    # ========================================================================
+
+    graph.add_node("orchestrate_pocs", orchestrate_pocs)
+    graph.add_node("inject_poc_context", inject_poc_context)
+
+    # ========================================================================
+    # Phase 2: POC Execution Nodes (per-POC flow)
+    # ========================================================================
+
     graph.add_node("compose_email", compose_email)
     graph.add_node("send_email", send_email)
-
-    # Phase 3: Wait for and process reply
     graph.add_node("wait_for_reply", wait_for_reply)
     graph.add_node("fetch_email", fetch_email)
     graph.add_node("extract_content", extract_content)
-    graph.add_node("validate_response", validate_response)
+    graph.add_node("validate_poc_response", validate_poc_response)
 
-    # Phase 4: Handle result
-    graph.add_node("handle_success", handle_success)
-    graph.add_node("handle_failure", handle_failure)
-    graph.add_node("prepare_followup", prepare_followup)
+    # POC result handling
     graph.add_node("handle_redirect", handle_redirect)
-
-    # Phase 5: Success acknowledgment
-    graph.add_node("compose_success_reply", compose_success_reply)
-    graph.add_node("send_success_reply", send_success_reply)
+    graph.add_node("mark_poc_success", mark_poc_success)
+    graph.add_node("mark_poc_failed", mark_poc_failed)
 
     # ========================================================================
-    # Add Edges
+    # Phase 3: Aggregation Nodes
     # ========================================================================
 
-    # Start -> Parse
-    graph.add_edge(START, "parse_instruction")
+    graph.add_node("aggregate_poc_responses", aggregate_poc_responses)
+    graph.add_node("detect_conflicts", detect_conflicts)
+    graph.add_node("resolve_conflicts", resolve_conflicts)
 
-    # Parse -> Compose (conditional)
+    # ========================================================================
+    # Phase 4: Completion Nodes
+    # ========================================================================
+
+    graph.add_node("validate_global_criteria", validate_global_criteria)
+    graph.add_node("handle_global_retry", handle_global_retry)
+    graph.add_node("send_multi_success_replies", send_multi_success_replies)
+    graph.add_node("finalize_success", finalize_success)
+    graph.add_node("finalize_failure", finalize_failure)
+
+    # ========================================================================
+    # Edges: Phase 1 - Planning
+    # ========================================================================
+
+    # START -> parse_multi_poc_instruction
+    graph.add_edge(START, "parse_multi_poc_instruction")
+
+    # parse_multi_poc_instruction -> build_dependency_graph or END
     graph.add_conditional_edges(
-        "parse_instruction",
+        "parse_multi_poc_instruction",
         route_after_parse,
         {
-            "compose_email": "compose_email",
+            "build_dependency_graph": "build_dependency_graph",
             "end": END,
         },
     )
 
-    # Linear flow: Compose -> Send -> Wait -> Fetch -> Extract -> Validate
-    graph.add_edge("compose_email", "send_email")
-    graph.add_edge("send_email", "wait_for_reply")
-    graph.add_edge("wait_for_reply", "fetch_email")
-    graph.add_edge("fetch_email", "extract_content")
-    graph.add_edge("extract_content", "validate_response")
+    # build_dependency_graph -> orchestrate_pocs
+    graph.add_edge("build_dependency_graph", "orchestrate_pocs")
 
-    # Validate -> Decision (conditional)
+    # ========================================================================
+    # Edges: Phase 2 - Orchestration Loop
+    # ========================================================================
+
+    # orchestrate_pocs -> execute/wait/aggregate/fail
     graph.add_conditional_edges(
-        "validate_response",
-        route_after_validation,
+        "orchestrate_pocs",
+        route_after_orchestration,
         {
-            "handle_success": "handle_success",
-            "handle_failure": "handle_failure",
-            "prepare_followup": "prepare_followup",
-            "handle_redirect": "handle_redirect",
+            "execute_poc": "inject_poc_context",
+            "wait_for_poc": "wait_for_reply",
+            "aggregate": "aggregate_poc_responses",
+            "fail_end": "finalize_failure",
         },
     )
 
-    # Success path -> Compose and send acknowledgment -> End
-    graph.add_edge("handle_success", "compose_success_reply")
-    graph.add_edge("compose_success_reply", "send_success_reply")
-    graph.add_edge("send_success_reply", END)
+    # ========================================================================
+    # Edges: POC Execution Flow
+    # ========================================================================
 
-    # Failure -> End
-    graph.add_edge("handle_failure", END)
+    # inject_poc_context -> compose_email -> send_email -> wait_for_reply
+    graph.add_edge("inject_poc_context", "compose_email")
+    graph.add_edge("compose_email", "send_email")
+    graph.add_edge("send_email", "wait_for_reply")
 
-    # Followup -> Back to compose
-    graph.add_edge("prepare_followup", "compose_email")
+    # wait_for_reply -> fetch_email -> extract_content -> validate_poc_response
+    graph.add_edge("wait_for_reply", "fetch_email")
+    graph.add_edge("fetch_email", "extract_content")
+    graph.add_edge("extract_content", "validate_poc_response")
 
-    # Redirect -> Back to compose (for new POC)
+    # validate_poc_response -> routing based on validation result
+    graph.add_conditional_edges(
+        "validate_poc_response",
+        route_after_poc_validation,
+        {
+            "poc_success": "mark_poc_success",
+            "poc_retry": "compose_email",  # Loop back for followup
+            "poc_redirect": "handle_redirect",
+            "poc_fail": "mark_poc_failed",
+        },
+    )
+
+    # handle_redirect -> compose_email (for new POC)
     graph.add_edge("handle_redirect", "compose_email")
 
-    logger.info("Mail agent graph created successfully")
+    # POC terminal states return to orchestrator
+    graph.add_edge("mark_poc_success", "orchestrate_pocs")
+    graph.add_edge("mark_poc_failed", "orchestrate_pocs")
+
+    # ========================================================================
+    # Edges: Phase 3 - Aggregation
+    # ========================================================================
+
+    # aggregate_poc_responses -> detect_conflicts
+    graph.add_edge("aggregate_poc_responses", "detect_conflicts")
+
+    # detect_conflicts -> has_conflicts or no_conflicts
+    graph.add_conditional_edges(
+        "detect_conflicts",
+        route_after_conflict_detection,
+        {
+            "has_conflicts": "resolve_conflicts",
+            "no_conflicts": "validate_global_criteria",
+        },
+    )
+
+    # resolve_conflicts -> needs_retry or resolved
+    graph.add_conditional_edges(
+        "resolve_conflicts",
+        route_after_conflict_resolution,
+        {
+            "needs_retry": "orchestrate_pocs",  # Back to orchestrator for retry
+            "resolved": "validate_global_criteria",
+        },
+    )
+
+    # ========================================================================
+    # Edges: Phase 4 - Completion
+    # ========================================================================
+
+    # validate_global_criteria -> valid or not_valid
+    graph.add_conditional_edges(
+        "validate_global_criteria",
+        route_after_global_validation,
+        {
+            "valid": "send_multi_success_replies",
+            "not_valid": "handle_global_retry",
+        },
+    )
+
+    # handle_global_retry -> orchestrate_pocs (for retry)
+    graph.add_edge("handle_global_retry", "orchestrate_pocs")
+
+    # send_multi_success_replies -> finalize_success -> END
+    graph.add_edge("send_multi_success_replies", "finalize_success")
+    graph.add_edge("finalize_success", END)
+
+    # finalize_failure -> END
+    graph.add_edge("finalize_failure", END)
+
+    logger.info("Multi-POC mail agent graph created successfully")
     return graph
 
 
@@ -212,8 +540,8 @@ def compile_mail_agent_graph(checkpointer: Any = None) -> Any:
     graph = create_mail_agent_graph()
 
     if checkpointer:
-        logger.info("Compiling graph with checkpointer")
+        logger.info("Compiling multi-POC graph with checkpointer")
         return graph.compile(checkpointer=checkpointer)
     else:
-        logger.info("Compiling graph without checkpointer")
+        logger.info("Compiling multi-POC graph without checkpointer")
         return graph.compile()

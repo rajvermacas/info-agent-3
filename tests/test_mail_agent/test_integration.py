@@ -103,20 +103,35 @@ class TestGraphCreation:
         assert compiled is not None
 
     def test_graph_has_required_nodes(self):
-        """Test graph contains all required nodes."""
+        """Test graph contains all required nodes for multi-POC orchestration."""
         graph = create_mail_agent_graph()
 
         expected_nodes = [
-            "parse_instruction",
+            # Planning phase
+            "parse_multi_poc_instruction",
+            "build_dependency_graph",
+            # Orchestration
+            "orchestrate_pocs",
+            "inject_poc_context",
+            # POC execution
             "compose_email",
             "send_email",
             "wait_for_reply",
             "fetch_email",
             "extract_content",
-            "validate_response",
-            "handle_success",
-            "handle_failure",
-            "prepare_followup",
+            "validate_poc_response",
+            "handle_redirect",
+            "mark_poc_success",
+            "mark_poc_failed",
+            # Aggregation
+            "aggregate_poc_responses",
+            "detect_conflicts",
+            "resolve_conflicts",
+            # Completion
+            "validate_global_criteria",
+            "send_multi_success_replies",
+            "finalize_success",
+            "finalize_failure",
         ]
 
         for node_name in expected_nodes:
