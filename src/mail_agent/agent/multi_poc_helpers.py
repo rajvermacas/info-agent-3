@@ -239,6 +239,65 @@ def get_waiting_pocs(state: "AgentState") -> list[str]:
     ]
 
 
+def get_completed_pocs(state: "AgentState") -> list[str]:
+    """
+    Get POC IDs that have completed successfully.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        List of POC IDs in completed state.
+    """
+    poc_states = state.get("poc_states", {})
+    return [
+        poc_id
+        for poc_id, poc_dict in poc_states.items()
+        if poc_dict.get("status") == POCStatus.COMPLETED.value
+    ]
+
+
+def get_failed_pocs(state: "AgentState") -> list[str]:
+    """
+    Get POC IDs that have failed.
+
+    Args:
+        state: Current agent state.
+
+    Returns:
+        List of POC IDs in failed state.
+    """
+    poc_states = state.get("poc_states", {})
+    return [
+        poc_id
+        for poc_id, poc_dict in poc_states.items()
+        if poc_dict.get("status") == POCStatus.FAILED.value
+    ]
+
+
+def check_dependencies_met(state: "AgentState", poc_id: str) -> bool:
+    """
+    Check if all dependencies for a POC are met (completed).
+
+    Args:
+        state: Current agent state.
+        poc_id: POC identifier to check.
+
+    Returns:
+        True if all dependencies are completed.
+    """
+    try:
+        poc_req = get_poc_requirement(state, poc_id)
+    except (KeyError, ValueError):
+        return False
+
+    if not poc_req.dependencies:
+        return True
+
+    completed_pocs = set(get_completed_pocs(state))
+    return all(dep_id in completed_pocs for dep_id in poc_req.dependencies)
+
+
 def get_poc_progress_summary(state: "AgentState") -> dict[str, int]:
     """
     Get summary of POC progress counts.
