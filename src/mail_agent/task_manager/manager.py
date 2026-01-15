@@ -55,12 +55,19 @@ class TaskManager:
     """
     Manages non-blocking task lifecycle for A2A protocol.
 
+    Supports both single-POC and multi-POC orchestration modes.
+
     Responsibilities:
     - Track suspended tasks (task_id ↔ poc_email mapping)
-    - Handle webhook routing to correct suspended task
+    - Handle webhook routing to correct suspended task and POC
     - Resume graph execution when webhook arrives
     - Store task results for polling
     - Manage task expiration (configurable timeout)
+
+    Multi-POC Support:
+    - Multiple POCs can be waiting per task (parallel execution)
+    - Each POC has its own suspension state within a task
+    - Webhook routing includes poc_id for targeted resumption
 
     Attributes:
         _settings: Application settings.
@@ -68,7 +75,8 @@ class TaskManager:
         _task_store: Task state CRUD operations.
         _checkpointer: LangGraph checkpointer for state persistence.
         _graph: Compiled LangGraph state machine.
-        _poc_to_task: In-memory mapping of POC email to task ID.
+        _poc_to_task: In-memory mapping of POC email to (task_id, poc_id).
+        _task_pocs: In-memory mapping of task_id to set of waiting poc_ids.
         _cleanup_task: Background task for expired task cleanup.
     """
 
@@ -109,14 +117,19 @@ class TaskManager:
         self._graph = graph
 
         # In-memory mapping for fast POC lookup
+        # Legacy: poc_email -> task_id (backward compatible)
         self._poc_to_task: dict[str, str] = {}
+        # Multi-POC: poc_email -> (task_id, poc_id)
+        self._poc_to_task_poc: dict[str, tuple[str, str]] = {}
+        # Multi-POC: task_id -> set of waiting poc_ids
+        self._task_pocs: dict[str, set[str]] = {}
         self._lock = asyncio.Lock()
 
         # Background cleanup task
         self._cleanup_task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
 
-        logger.info("TaskManager initialized")
+        logger.info("TaskManager initialized (multi-POC support enabled)")
 
     @property
     def graph(self) -> CompiledStateGraph:
@@ -173,13 +186,18 @@ class TaskManager:
         logger.info("TaskManager stopped")
 
     async def _restore_suspended_tasks(self) -> None:
-        """Restore suspended tasks from database into memory."""
+        """Restore suspended tasks from database into memory.
+
+        Handles both legacy single-POC and multi-POC suspended tasks.
+        POC ID is recovered from interrupt_data if present.
+        """
         logger.info("Restoring suspended tasks from database")
 
         tasks = await self._task_store.get_all_suspended_tasks()
         now = datetime.now(timezone.utc)
 
         restored = 0
+        restored_multi_poc = 0
         expired = 0
 
         for task in tasks:
@@ -187,20 +205,44 @@ class TaskManager:
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=timezone.utc)
 
+            # Extract poc_id from interrupt_data if present
+            interrupt_data = task.get("interrupt_data") or {}
+            poc_id = interrupt_data.get("poc_id")
+
             if now > expires_at:
                 # Task expired while server was down
                 logger.warning(
                     f"Task {task['task_id']} expired during downtime, marking failed"
                 )
-                await self._handle_expired_task(task["task_id"], task["poc_email"])
+                await self._handle_expired_task(
+                    task["task_id"],
+                    task["poc_email"],
+                    poc_id=poc_id,
+                )
                 expired += 1
             else:
                 # Restore to in-memory mapping
                 async with self._lock:
-                    self._poc_to_task[task["poc_email"]] = task["task_id"]
-                restored += 1
+                    if poc_id:
+                        # Multi-POC mode
+                        self._poc_to_task_poc[task["poc_email"]] = (
+                            task["task_id"],
+                            poc_id,
+                        )
+                        if task["task_id"] not in self._task_pocs:
+                            self._task_pocs[task["task_id"]] = set()
+                        self._task_pocs[task["task_id"]].add(poc_id)
+                        restored_multi_poc += 1
+                    else:
+                        # Legacy single-POC mode
+                        self._poc_to_task[task["poc_email"]] = task["task_id"]
+                    restored += 1
 
-        logger.info(f"Restored {restored} suspended tasks, cleaned up {expired} expired")
+        logger.info(
+            f"Restored {restored} suspended tasks "
+            f"({restored_multi_poc} multi-POC), "
+            f"cleaned up {expired} expired"
+        )
 
     # =========================================================================
     # Task Suspension
@@ -212,6 +254,7 @@ class TaskManager:
         poc_email: str,
         thread_id: str,
         interrupt_data: Optional[dict[str, Any]] = None,
+        poc_id: Optional[str] = None,
     ) -> None:
         """
         Suspend a task waiting for POC reply.
@@ -219,11 +262,15 @@ class TaskManager:
         Called when the graph reaches an interrupt point (wait_for_reply node).
         Registers the task for webhook routing and persists to database.
 
+        Supports both single-POC (legacy) and multi-POC orchestration.
+
         Args:
             task_id: A2A task identifier.
             poc_email: POC email the task is waiting for.
             thread_id: LangGraph thread ID (same as task_id typically).
             interrupt_data: Data from the interrupt point.
+            poc_id: Optional POC identifier for multi-POC orchestration.
+                    If not provided, uses legacy single-POC mode.
 
         Raises:
             TaskManagerError: If task cannot be suspended.
@@ -232,61 +279,125 @@ class TaskManager:
 
         logger.info(
             f"Suspending task {task_id} waiting for reply from {poc_email}"
+            f" (poc_id={poc_id})"
         )
 
         async with self._lock:
-            # Check for duplicate POC registration
-            if poc_email_lower in self._poc_to_task:
-                existing_task = self._poc_to_task[poc_email_lower]
-                if existing_task != task_id:
-                    raise TaskManagerError(
-                        f"POC {poc_email} already has pending task {existing_task}"
-                    )
+            if poc_id:
+                # Multi-POC mode: Allow multiple POCs per task
+                if poc_email_lower in self._poc_to_task_poc:
+                    existing_task, existing_poc = self._poc_to_task_poc[poc_email_lower]
+                    if existing_task != task_id or existing_poc != poc_id:
+                        raise TaskManagerError(
+                            f"POC email {poc_email} already registered to "
+                            f"task={existing_task}, poc_id={existing_poc}"
+                        )
 
-            # Register in memory
-            self._poc_to_task[poc_email_lower] = task_id
+                # Register multi-POC mappings
+                self._poc_to_task_poc[poc_email_lower] = (task_id, poc_id)
 
-        # Persist to database
+                if task_id not in self._task_pocs:
+                    self._task_pocs[task_id] = set()
+                self._task_pocs[task_id].add(poc_id)
+
+                logger.debug(
+                    f"Multi-POC: Registered {poc_email_lower} -> "
+                    f"(task={task_id}, poc={poc_id}). "
+                    f"Task {task_id} now has {len(self._task_pocs[task_id])} waiting POCs"
+                )
+
+            else:
+                # Legacy single-POC mode
+                if poc_email_lower in self._poc_to_task:
+                    existing_task = self._poc_to_task[poc_email_lower]
+                    if existing_task != task_id:
+                        raise TaskManagerError(
+                            f"POC {poc_email} already has pending task {existing_task}"
+                        )
+
+                self._poc_to_task[poc_email_lower] = task_id
+
+        # Persist to database (include poc_id in interrupt_data for recovery)
         try:
+            persist_data = dict(interrupt_data or {})
+            if poc_id:
+                persist_data["poc_id"] = poc_id
+
             await self._task_store.suspend_task(
                 task_id=task_id,
                 poc_email=poc_email_lower,
                 thread_id=thread_id,
                 timeout_seconds=self._settings.task_suspend_timeout_seconds,
-                interrupt_data=interrupt_data,
+                interrupt_data=persist_data,
             )
-            logger.info(f"Task {task_id} suspended successfully")
+            logger.info(
+                f"Task {task_id} suspended successfully"
+                f" (poc_id={poc_id}, poc_email={poc_email_lower})"
+            )
 
         except Exception as e:
             # Rollback in-memory registration on failure
             async with self._lock:
-                if self._poc_to_task.get(poc_email_lower) == task_id:
-                    del self._poc_to_task[poc_email_lower]
+                if poc_id:
+                    if self._poc_to_task_poc.get(poc_email_lower) == (task_id, poc_id):
+                        del self._poc_to_task_poc[poc_email_lower]
+                    if task_id in self._task_pocs:
+                        self._task_pocs[task_id].discard(poc_id)
+                        if not self._task_pocs[task_id]:
+                            del self._task_pocs[task_id]
+                else:
+                    if self._poc_to_task.get(poc_email_lower) == task_id:
+                        del self._poc_to_task[poc_email_lower]
             raise TaskManagerError(f"Failed to suspend task: {e}") from e
 
     # =========================================================================
     # Webhook Handling
     # =========================================================================
 
-    async def handle_webhook(self, payload: WebhookPayload) -> bool:
+    async def handle_webhook(
+        self,
+        payload: WebhookPayload,
+        poc_id: Optional[str] = None,
+    ) -> bool:
         """
         Handle incoming webhook and route to correct suspended task.
 
-        Looks up the task by sender email and triggers task resumption.
+        Looks up the task by sender email (and optional poc_id for multi-POC).
+        Triggers task resumption with POC context.
 
         Args:
             payload: Webhook payload with email notification.
+            poc_id: Optional POC identifier from webhook metadata.
+                    Used for multi-POC routing to specific POC within task.
 
         Returns:
             True if webhook was handled (task found and resumed),
             False if no matching suspended task.
         """
         sender = payload.from_address.lower()
-        logger.info(f"Handling webhook from {sender}, email_id={payload.email_id}")
+        logger.info(
+            f"Handling webhook from {sender}, email_id={payload.email_id}, "
+            f"poc_id={poc_id}"
+        )
 
-        # Lookup task by sender
+        task_id: Optional[str] = None
+        resolved_poc_id: Optional[str] = poc_id
+
+        # Lookup task: try multi-POC first, then legacy
         async with self._lock:
-            task_id = self._poc_to_task.get(sender)
+            if sender in self._poc_to_task_poc:
+                # Multi-POC mode lookup
+                task_id, stored_poc_id = self._poc_to_task_poc[sender]
+                # Prefer stored poc_id if incoming is None
+                resolved_poc_id = poc_id or stored_poc_id
+                logger.debug(
+                    f"Multi-POC lookup: {sender} -> task={task_id}, "
+                    f"poc_id={resolved_poc_id}"
+                )
+            elif sender in self._poc_to_task:
+                # Legacy single-POC mode
+                task_id = self._poc_to_task[sender]
+                logger.debug(f"Legacy lookup: {sender} -> task={task_id}")
 
         if task_id is None:
             logger.warning(f"No suspended task for sender: {sender}")
@@ -296,9 +407,7 @@ class TaskManager:
         task_info = await self._task_store.get_suspended_task(task_id)
         if task_info is None:
             logger.error(f"Task {task_id} in memory but not in database")
-            async with self._lock:
-                if sender in self._poc_to_task:
-                    del self._poc_to_task[sender]
+            await self._cleanup_stale_mappings(sender, task_id, resolved_poc_id)
             return False
 
         # Check expiration
@@ -308,29 +417,63 @@ class TaskManager:
 
         if datetime.now(timezone.utc) > expires_at:
             logger.warning(f"Task {task_id} expired, ignoring webhook")
-            await self._handle_expired_task(task_id, sender)
+            await self._handle_expired_task(task_id, sender, resolved_poc_id)
             return False
 
-        # Remove from suspended state before resuming
+        # Remove POC from suspended state
         async with self._lock:
-            if sender in self._poc_to_task:
+            if resolved_poc_id and sender in self._poc_to_task_poc:
+                del self._poc_to_task_poc[sender]
+                if task_id in self._task_pocs:
+                    self._task_pocs[task_id].discard(resolved_poc_id)
+                    if not self._task_pocs[task_id]:
+                        del self._task_pocs[task_id]
+                logger.debug(
+                    f"Removed multi-POC mapping: {sender}, poc_id={resolved_poc_id}"
+                )
+            elif sender in self._poc_to_task:
                 del self._poc_to_task[sender]
 
         await self._task_store.remove_suspended_task(task_id)
 
-        # Resume task in background
-        logger.info(f"Resuming task {task_id} with webhook data")
+        # Resume task in background with POC context
+        logger.info(
+            f"Resuming task {task_id} with webhook data (poc_id={resolved_poc_id})"
+        )
         asyncio.create_task(
-            self._resume_task(task_id, task_info["thread_id"], payload)
+            self._resume_task(
+                task_id,
+                task_info["thread_id"],
+                payload,
+                poc_id=resolved_poc_id,
+            )
         )
 
         return True
+
+    async def _cleanup_stale_mappings(
+        self,
+        poc_email: str,
+        task_id: str,
+        poc_id: Optional[str],
+    ) -> None:
+        """Clean up stale in-memory mappings when DB is inconsistent."""
+        async with self._lock:
+            if poc_id and poc_email in self._poc_to_task_poc:
+                del self._poc_to_task_poc[poc_email]
+                if task_id in self._task_pocs:
+                    self._task_pocs[task_id].discard(poc_id)
+                    if not self._task_pocs[task_id]:
+                        del self._task_pocs[task_id]
+            if poc_email in self._poc_to_task:
+                del self._poc_to_task[poc_email]
 
     async def _resume_task(
         self,
         task_id: str,
         thread_id: str,
         payload: WebhookPayload,
+        poc_id: Optional[str] = None,
     ) -> None:
         """
         Resume a suspended task from checkpoint.
@@ -342,11 +485,18 @@ class TaskManager:
             task_id: Task identifier.
             thread_id: LangGraph thread ID.
             payload: Webhook payload with resume data.
+            poc_id: Optional POC identifier for multi-POC orchestration.
         """
-        logger.info(f"Resuming task {task_id} from checkpoint")
+        logger.info(
+            f"Resuming task {task_id} from checkpoint (poc_id={poc_id})"
+        )
 
         config = {"configurable": {"thread_id": thread_id}}
         resume_data = payload.to_resume_data()
+
+        # Include poc_id in resume data for multi-POC orchestration
+        if poc_id:
+            resume_data["poc_id"] = poc_id
 
         try:
             # Create resume command
@@ -357,11 +507,17 @@ class TaskManager:
 
             async for event in self._graph.astream(command, config=config):
                 for node_name, node_output in event.items():
-                    logger.debug(f"Task {task_id}: Node {node_name} completed")
+                    logger.debug(
+                        f"Task {task_id}: Node {node_name} completed "
+                        f"(poc_id={poc_id})"
+                    )
 
-                    # Check for another interrupt (retry scenario)
+                    # Check for another interrupt (retry scenario or next POC)
                     if self._is_interrupt_event(event):
-                        logger.info(f"Task {task_id} interrupted again (retry)")
+                        logger.info(
+                            f"Task {task_id} interrupted again "
+                            f"(retry or next POC, poc_id={poc_id})"
+                        )
                         await self._handle_re_suspend(task_id, event, thread_id)
                         return
 
@@ -380,7 +536,10 @@ class TaskManager:
                     result=final_state if success else None,
                     error=final_state.get("error"),
                 )
-                logger.info(f"Task {task_id} resumed and completed with status: {status}")
+                logger.info(
+                    f"Task {task_id} resumed and completed with status: {status} "
+                    f"(poc_id={poc_id})"
+                )
             else:
                 await self._task_store.save_result(
                     task_id=task_id,
@@ -659,12 +818,25 @@ class TaskManager:
         except Exception as e:
             logger.error(f"Error during expired task cleanup: {e}")
 
-    async def _handle_expired_task(self, task_id: str, poc_email: str) -> None:
+    async def _handle_expired_task(
+        self,
+        task_id: str,
+        poc_email: str,
+        poc_id: Optional[str] = None,
+    ) -> None:
         """Handle an expired task - remove from state and store failure."""
-        logger.info(f"Handling expired task {task_id}")
+        logger.info(
+            f"Handling expired task {task_id} (poc_email={poc_email}, poc_id={poc_id})"
+        )
 
-        # Remove from in-memory mapping
+        # Remove from in-memory mappings
         async with self._lock:
+            if poc_id and poc_email in self._poc_to_task_poc:
+                del self._poc_to_task_poc[poc_email]
+                if task_id in self._task_pocs:
+                    self._task_pocs[task_id].discard(poc_id)
+                    if not self._task_pocs[task_id]:
+                        del self._task_pocs[task_id]
             if poc_email in self._poc_to_task:
                 del self._poc_to_task[poc_email]
 
@@ -678,7 +850,7 @@ class TaskManager:
             error=f"Task expired: no reply received within {self._settings.task_suspend_timeout_seconds} seconds",
         )
 
-        logger.info(f"Expired task {task_id} cleaned up")
+        logger.info(f"Expired task {task_id} cleaned up (poc_id={poc_id})")
 
     # =========================================================================
     # Utility Methods
@@ -686,12 +858,15 @@ class TaskManager:
 
     def get_registered_pocs(self) -> list[str]:
         """
-        Get list of POC emails with suspended tasks.
+        Get list of POC emails with suspended tasks (legacy + multi-POC).
 
         Returns:
             List of POC email addresses (lowercase).
         """
-        return list(self._poc_to_task.keys())
+        # Combine both legacy and multi-POC registrations
+        legacy_pocs = set(self._poc_to_task.keys())
+        multi_pocs = set(self._poc_to_task_poc.keys())
+        return list(legacy_pocs | multi_pocs)
 
     def get_task_for_poc(self, poc_email: str) -> Optional[str]:
         """
@@ -703,9 +878,72 @@ class TaskManager:
         Returns:
             Task ID or None if not found.
         """
-        return self._poc_to_task.get(poc_email.lower())
+        email_lower = poc_email.lower()
+
+        # Check multi-POC first, then legacy
+        if email_lower in self._poc_to_task_poc:
+            task_id, _ = self._poc_to_task_poc[email_lower]
+            return task_id
+
+        return self._poc_to_task.get(email_lower)
+
+    def get_task_poc_for_email(
+        self,
+        poc_email: str,
+    ) -> Optional[tuple[str, Optional[str]]]:
+        """
+        Get task ID and POC ID for a POC email.
+
+        Args:
+            poc_email: POC email address.
+
+        Returns:
+            Tuple of (task_id, poc_id) or None if not found.
+            poc_id will be None for legacy single-POC registrations.
+        """
+        email_lower = poc_email.lower()
+
+        # Check multi-POC first
+        if email_lower in self._poc_to_task_poc:
+            return self._poc_to_task_poc[email_lower]
+
+        # Fall back to legacy
+        task_id = self._poc_to_task.get(email_lower)
+        if task_id:
+            return (task_id, None)
+
+        return None
+
+    def get_waiting_pocs_for_task(self, task_id: str) -> set[str]:
+        """
+        Get set of POC IDs waiting for replies in a task.
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            Set of POC IDs currently waiting, empty if none.
+        """
+        return self._task_pocs.get(task_id, set()).copy()
+
+    def get_task_waiting_count(self, task_id: str) -> int:
+        """
+        Get number of POCs waiting for replies in a task.
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            Number of POCs in waiting state.
+        """
+        return len(self._task_pocs.get(task_id, set()))
 
     @property
     def suspended_task_count(self) -> int:
-        """Get number of suspended tasks."""
-        return len(self._poc_to_task)
+        """Get number of suspended task registrations (legacy + multi-POC)."""
+        return len(self._poc_to_task) + len(self._poc_to_task_poc)
+
+    @property
+    def multi_poc_task_count(self) -> int:
+        """Get number of tasks with multiple waiting POCs."""
+        return len(self._task_pocs)

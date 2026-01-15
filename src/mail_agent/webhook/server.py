@@ -32,6 +32,31 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
+class WebhookMetadata(BaseModel):
+    """
+    Metadata from webhook registration.
+
+    Contains routing information for multi-POC orchestration.
+    """
+
+    task_id: Optional[str] = Field(
+        default=None,
+        description="A2A task identifier"
+    )
+    poc_id: Optional[str] = Field(
+        default=None,
+        description="POC identifier for multi-POC orchestration"
+    )
+    poc_email: Optional[str] = Field(
+        default=None,
+        description="POC email address"
+    )
+    extra: Optional[dict[str, str]] = Field(
+        default=None,
+        description="Additional metadata key-value pairs"
+    )
+
+
 class WebhookPayload(BaseModel):
     """
     Webhook payload received from mock SMTP server.
@@ -50,6 +75,10 @@ class WebhookPayload(BaseModel):
     attachment_count: int = Field(description="Number of attachments")
     received_at: str = Field(description="ISO timestamp of when email was received")
     body_preview: str = Field(default="", description="Preview of email body")
+    metadata: Optional[WebhookMetadata] = Field(
+        default=None,
+        description="Optional metadata from webhook registration"
+    )
 
 
 @dataclass
@@ -188,6 +217,14 @@ class WebhookServer:
                 payload = WebhookPayload(**body)
                 event = WebhookEvent.from_payload(payload)
 
+                # Log metadata if present (for multi-POC tracing)
+                if payload.metadata:
+                    logger.info(
+                        f"Webhook metadata: task_id={payload.metadata.task_id}, "
+                        f"poc_id={payload.metadata.poc_id}, "
+                        f"poc_email={payload.metadata.poc_email}"
+                    )
+
                 # Route based on mode
                 if self._task_manager is not None:
                     # A2A mode: Route through TaskManager
@@ -235,6 +272,8 @@ class WebhookServer:
         """
         Route webhook payload to TaskManager.
 
+        Extracts poc_id from metadata for multi-POC routing.
+
         Args:
             payload: Webhook payload to route.
 
@@ -259,7 +298,16 @@ class WebhookServer:
             body_preview=payload.body_preview,
         )
 
-        return await self._task_manager.handle_webhook(tm_payload)
+        # Extract poc_id from metadata for multi-POC routing
+        poc_id: Optional[str] = None
+        if payload.metadata:
+            poc_id = payload.metadata.poc_id
+            logger.debug(
+                f"Extracted poc_id={poc_id} from webhook metadata for "
+                f"task_id={payload.metadata.task_id}"
+            )
+
+        return await self._task_manager.handle_webhook(tm_payload, poc_id=poc_id)
 
     async def start(self) -> None:
         """

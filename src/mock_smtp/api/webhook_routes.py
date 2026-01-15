@@ -7,9 +7,34 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, HttpUrl
 
-from mock_smtp.webhooks.registry import WebhookRegistry, WebhookRegistration
+from mock_smtp.webhooks.registry import (
+    WebhookMetadata,
+    WebhookRegistry,
+    WebhookRegistration,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class WebhookMetadataRequest(BaseModel):
+    """Request model for webhook metadata."""
+
+    task_id: Optional[str] = Field(
+        default=None,
+        description="A2A task identifier"
+    )
+    poc_id: Optional[str] = Field(
+        default=None,
+        description="POC identifier for multi-POC orchestration"
+    )
+    poc_email: Optional[str] = Field(
+        default=None,
+        description="POC email address"
+    )
+    extra: Optional[dict[str, str]] = Field(
+        default=None,
+        description="Additional metadata key-value pairs"
+    )
 
 
 class WebhookCreateRequest(BaseModel):
@@ -22,6 +47,10 @@ class WebhookCreateRequest(BaseModel):
     inbox_filter: Optional[str] = Field(
         default=None,
         description="Optional inbox email address to filter notifications"
+    )
+    metadata: Optional[WebhookMetadataRequest] = Field(
+        default=None,
+        description="Optional metadata for multi-POC routing"
     )
 
 
@@ -50,7 +79,7 @@ def create_webhook_router(webhook_registry: WebhookRegistry) -> APIRouter:
         Register a new webhook.
 
         Args:
-            request: WebhookCreateRequest with URL and optional filter
+            request: WebhookCreateRequest with URL, optional filter, and metadata
 
         Returns:
             Created WebhookRegistration
@@ -58,18 +87,39 @@ def create_webhook_router(webhook_registry: WebhookRegistry) -> APIRouter:
         Raises:
             400: If URL is invalid
         """
+        metadata_info = ""
+        if request.metadata:
+            metadata_info = (
+                f" metadata.task_id={request.metadata.task_id}"
+                f" metadata.poc_id={request.metadata.poc_id}"
+            )
+
         logger.info(
             f"POST /api/webhooks url={request.url} "
-            f"filter={request.inbox_filter or 'all'}"
+            f"filter={request.inbox_filter or 'all'}{metadata_info}"
         )
 
         try:
+            # Convert request metadata to WebhookMetadata if provided
+            webhook_metadata = None
+            if request.metadata:
+                webhook_metadata = WebhookMetadata(
+                    task_id=request.metadata.task_id,
+                    poc_id=request.metadata.poc_id,
+                    poc_email=request.metadata.poc_email,
+                    extra=request.metadata.extra,
+                )
+
             registration = webhook_registry.register(
                 url=str(request.url),
-                inbox_filter=request.inbox_filter
+                inbox_filter=request.inbox_filter,
+                metadata=webhook_metadata,
             )
 
-            logger.info(f"Registered webhook {registration.id}")
+            logger.info(
+                f"Registered webhook {registration.id}"
+                f" (poc_id={webhook_metadata.poc_id if webhook_metadata else None})"
+            )
             return registration
 
         except Exception as e:

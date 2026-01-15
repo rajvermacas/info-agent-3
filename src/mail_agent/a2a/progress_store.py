@@ -19,11 +19,40 @@ from mail_agent.task_manager.models import TaskState
 logger = logging.getLogger(__name__)
 
 
+class POCProgress(BaseModel):
+    """POC-level progress for multi-POC orchestration."""
+
+    total: int = Field(default=0, description="Total number of POCs")
+    pending: int = Field(default=0, description="Number of pending POCs")
+    in_progress: int = Field(default=0, description="Number of POCs in progress")
+    waiting: int = Field(default=0, description="Number of POCs waiting for replies")
+    completed: int = Field(default=0, description="Number of completed POCs")
+    failed: int = Field(default=0, description="Number of failed POCs")
+
+
 class ProgressEvent(BaseModel):
     """
     Progress event for task execution tracking.
 
     Emitted by executor nodes during graph execution.
+    Supports both single-POC and multi-POC orchestration modes.
+
+    Multi-POC event types:
+    - phase_planning: Parsing instruction, building dependency graph
+    - phase_execution: Executing POCs (sending emails, waiting for replies)
+    - phase_aggregation: Aggregating responses, resolving conflicts
+    - phase_completion: Sending success replies, finishing up
+
+    POC-level events:
+    - poc_started: A specific POC began execution
+    - poc_email_sent: Email sent to a POC
+    - poc_waiting: Waiting for POC reply
+    - poc_reply_received: Reply received from POC
+    - poc_validated: POC response validated
+    - poc_retry: POC needs retry (followup)
+    - poc_redirect: POC redirected to another contact
+    - poc_completed: POC finished successfully
+    - poc_failed: POC failed after max attempts
     """
 
     task_id: str = Field(description="Task identifier")
@@ -39,7 +68,7 @@ class ProgressEvent(BaseModel):
     )
     poc_email: Optional[str] = Field(
         default=None,
-        description="POC email (for suspended state)",
+        description="POC email (for suspended state or POC-level events)",
     )
     result: Optional[dict[str, Any]] = Field(
         default=None,
@@ -54,6 +83,28 @@ class ProgressEvent(BaseModel):
         description="Sequential event ID for SSE Last-Event-Id",
     )
 
+    # Multi-POC fields
+    poc_id: Optional[str] = Field(
+        default=None,
+        description="POC identifier for multi-POC orchestration",
+    )
+    phase: Optional[str] = Field(
+        default=None,
+        description="Current orchestration phase (planning, execution, aggregation, completion)",
+    )
+    event_type: Optional[str] = Field(
+        default=None,
+        description="Specific event type for multi-POC (poc_started, poc_completed, etc.)",
+    )
+    poc_progress: Optional[POCProgress] = Field(
+        default=None,
+        description="Aggregate POC progress for multi-POC mode",
+    )
+    dynamic_poc_spawned: Optional[bool] = Field(
+        default=None,
+        description="Whether this POC was dynamically spawned",
+    )
+
     def to_sse_format(self) -> str:
         """
         Convert to SSE wire format.
@@ -61,17 +112,22 @@ class ProgressEvent(BaseModel):
         Returns:
             SSE formatted string with id, event, and data fields.
         """
-        event_type = self._get_event_type()
+        sse_event_type = self._get_event_type()
         data = self.model_dump_json(exclude_none=True)
-        return f"id: {self.event_id}\nevent: {event_type}\ndata: {data}\n\n"
+        return f"id: {self.event_id}\nevent: {sse_event_type}\ndata: {data}\n\n"
 
     def _get_event_type(self) -> str:
         """
-        Get SSE event type based on task state.
+        Get SSE event type based on task state and multi-POC event_type.
 
         Returns:
-            Event type string: 'progress', 'complete', 'error', or 'suspended'.
+            Event type string.
         """
+        # Use specific event_type for multi-POC if provided
+        if self.event_type:
+            return self.event_type
+
+        # Fall back to state-based event type
         if self.state == TaskState.COMPLETED:
             return "complete"
         elif self.state == TaskState.FAILED:

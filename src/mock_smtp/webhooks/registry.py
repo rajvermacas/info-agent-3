@@ -10,11 +10,38 @@ from pydantic import BaseModel, Field, HttpUrl
 logger = logging.getLogger(__name__)
 
 
+class WebhookMetadata(BaseModel):
+    """
+    Metadata for webhook registration.
+
+    Used to store additional context for multi-POC orchestration,
+    allowing the webhook receiver to route to the correct POC.
+    """
+
+    task_id: Optional[str] = Field(
+        default=None,
+        description="A2A task identifier"
+    )
+    poc_id: Optional[str] = Field(
+        default=None,
+        description="POC identifier for multi-POC orchestration"
+    )
+    poc_email: Optional[str] = Field(
+        default=None,
+        description="POC email address"
+    )
+    extra: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Additional metadata key-value pairs"
+    )
+
+
 class WebhookRegistration(BaseModel):
     """
     Webhook registration model.
 
-    Represents a registered webhook with optional filtering by inbox.
+    Represents a registered webhook with optional filtering by inbox
+    and metadata for multi-POC routing.
     """
 
     id: UUID = Field(
@@ -28,6 +55,10 @@ class WebhookRegistration(BaseModel):
     inbox_filter: Optional[str] = Field(
         default=None,
         description="If set, only notify for emails to this inbox"
+    )
+    metadata: Optional[WebhookMetadata] = Field(
+        default=None,
+        description="Optional metadata for multi-POC routing"
     )
     created_at: str = Field(
         default_factory=lambda: __import__('datetime').datetime.utcnow().isoformat(),
@@ -69,7 +100,8 @@ class WebhookRegistry:
     def register(
         self,
         url: str,
-        inbox_filter: Optional[str] = None
+        inbox_filter: Optional[str] = None,
+        metadata: Optional[WebhookMetadata] = None,
     ) -> WebhookRegistration:
         """
         Register a new webhook.
@@ -77,6 +109,7 @@ class WebhookRegistry:
         Args:
             url: Webhook URL to POST to
             inbox_filter: Optional inbox email address to filter notifications
+            metadata: Optional metadata for multi-POC routing
 
         Returns:
             WebhookRegistration instance
@@ -88,7 +121,8 @@ class WebhookRegistry:
             # Validate URL by creating the registration
             registration = WebhookRegistration(
                 url=url,
-                inbox_filter=inbox_filter
+                inbox_filter=inbox_filter,
+                metadata=metadata,
             )
 
             self._webhooks[registration.id] = registration
