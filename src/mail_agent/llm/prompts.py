@@ -91,6 +91,43 @@ class SuccessAcknowledgmentEmail(BaseModel):
 
 
 # ============================================================================
+# Multi-POC Output Schemas (re-exported for backward compatibility)
+# ============================================================================
+
+# Import multi-POC schemas and prompts from dedicated module
+from mail_agent.llm.multi_poc_prompts import (  # noqa: E402
+    ConflictResolutionSchema,
+    DynamicPOCSpawnConfig,
+    GlobalValidationResultSchema,
+    MultiPOCPromptTemplates,
+    ParsedMultiPOCInstruction,
+    ParsedPOCRequirement,
+    POCValidationResultSchema,
+)
+
+# Re-export for backward compatibility
+__all__ = [
+    # Single-POC schemas
+    "ParsedInstruction",
+    "ComposedEmail",
+    "RedirectInfo",
+    "ValidationResult",
+    "FollowUpEmail",
+    "SuccessAcknowledgmentEmail",
+    # Multi-POC schemas (re-exported)
+    "DynamicPOCSpawnConfig",
+    "ParsedPOCRequirement",
+    "ParsedMultiPOCInstruction",
+    "POCValidationResultSchema",
+    "ConflictResolutionSchema",
+    "GlobalValidationResultSchema",
+    # Prompt templates
+    "PromptTemplates",
+    "MultiPOCPromptTemplates",
+]
+
+
+# ============================================================================
 # Prompt Templates
 # ============================================================================
 

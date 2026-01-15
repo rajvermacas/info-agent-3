@@ -1,5 +1,7 @@
 """
-Tests for the agent state module.
+Tests for the legacy single-POC agent state module.
+
+For multi-POC orchestration state tests, see test_multi_poc_state.py.
 """
 
 import pytest

@@ -1,7 +1,8 @@
 """
 Agent State - TypedDict state schema for LangGraph.
 
-Defines the complete state structure for the mail agent state machine.
+Defines the complete state structure for the mail agent state machine,
+including support for Multi-POC orchestration with DAG-based execution.
 """
 
 import operator
@@ -10,6 +11,77 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Optional
 from typing_extensions import TypedDict
 from uuid import UUID
+
+# Re-export multi-POC models for backward compatibility
+from mail_agent.agent.multi_poc_state import (  # noqa: F401
+    DataConflict,
+    DynamicPOCConfig,
+    GlobalValidationResult,
+    OrchestrationAction,
+    OrchestrationDecision,
+    POCExecutionPlan,
+    POCRequirement,
+    POCState,
+    POCStatus,
+    POCValidationResult,
+)
+
+# Re-export multi-POC helper functions
+from mail_agent.agent.multi_poc_helpers import (  # noqa: F401
+    add_poc_to_plan,
+    all_pocs_terminal,
+    create_initial_multi_poc_state,
+    get_all_poc_states,
+    get_execution_plan,
+    get_poc_progress_summary,
+    get_poc_requirement,
+    get_poc_state,
+    get_ready_pocs,
+    get_waiting_pocs,
+    update_poc_state,
+)
+
+# Expose all models through __all__
+__all__ = [
+    # Legacy single-POC models
+    "SentEmail",
+    "ReceivedEmail",
+    "ValidationResult",
+    "RedirectInfo",
+    "ConversationState",
+    "ParsedRequest",
+    "AgentState",
+    # Legacy helpers
+    "create_initial_state",
+    "get_conversation",
+    "update_conversation",
+    "get_parsed_request",
+    "all_conversations_complete",
+    "get_active_poc",
+    # Multi-POC models (re-exported)
+    "POCStatus",
+    "OrchestrationAction",
+    "DynamicPOCConfig",
+    "POCRequirement",
+    "POCValidationResult",
+    "POCState",
+    "POCExecutionPlan",
+    "DataConflict",
+    "GlobalValidationResult",
+    "OrchestrationDecision",
+    # Multi-POC helpers
+    "create_initial_multi_poc_state",
+    "get_execution_plan",
+    "get_poc_state",
+    "update_poc_state",
+    "get_poc_requirement",
+    "get_all_poc_states",
+    "all_pocs_terminal",
+    "get_ready_pocs",
+    "get_waiting_pocs",
+    "get_poc_progress_summary",
+    "add_poc_to_plan",
+]
 
 
 # ============================================================================
@@ -255,21 +327,63 @@ class AgentState(TypedDict, total=False):
 
     Uses TypedDict for LangGraph compatibility. Some fields use Annotated
     with operator.add for list reduction (appending instead of replacing).
+
+    This state supports both single-POC (legacy) and multi-POC orchestration:
+    - Single POC: Uses conversations, current_poc, parsed_request
+    - Multi-POC: Uses execution_plan, poc_states, current_poc_id, aggregated_data
     """
 
-    # Original request
+    # =========================================================================
+    # Original Request
+    # =========================================================================
     user_instruction: str
 
-    # Parsed request (set by parse_instruction node)
+    # =========================================================================
+    # Single-POC Mode Fields (Legacy - for backward compatibility)
+    # =========================================================================
+
+    # Parsed request (set by parse_instruction node - legacy single-POC)
     parsed_request: Optional[dict[str, Any]]
 
-    # Per-POC conversation state
+    # Per-POC conversation state (legacy)
     # Key: POC email address, Value: ConversationState as dict
     conversations: dict[str, dict[str, Any]]
 
-    # Current processing context
+    # Current POC being processed (legacy single-POC mode)
+    current_poc: Optional[str]
+
+    # =========================================================================
+    # Multi-POC Orchestration Fields (New)
+    # =========================================================================
+
+    # Execution plan with all POC requirements and dependency graph
+    execution_plan: Optional[dict[str, Any]]  # POCExecutionPlan as dict
+
+    # Per-POC execution state
+    # Key: poc_id, Value: POCState as dict
+    poc_states: dict[str, dict[str, Any]]
+
+    # Current POC ID being processed in multi-POC mode
+    current_poc_id: Optional[str]
+
+    # Aggregated data from all POCs (Phase 3: Aggregation)
+    aggregated_data: dict[str, Any]
+
+    # Detected conflicts between POC responses
+    conflicts: list[dict[str, Any]]  # List of DataConflict as dict
+
+    # Global validation result
+    global_validation_result: Optional[dict[str, Any]]  # GlobalValidationResult as dict
+
+    # Current orchestration phase
+    orchestration_phase: Optional[str]  # planning, execution, aggregation, completion
+
+    # =========================================================================
+    # Common Fields (Both Modes)
+    # =========================================================================
+
+    # Current node in graph execution
     current_node: str
-    current_poc: Optional[str]  # POC being processed
 
     # A2A task identifier (set when running in A2A mode)
     task_id: Optional[str]
@@ -288,6 +402,10 @@ class AgentState(TypedDict, total=False):
 
     # Webhook registration
     webhook_id: Optional[str]
+
+    # =========================================================================
+    # Temporary Fields (Passed between nodes, prefixed with _)
+    # =========================================================================
 
     # Temporary composed email data (passed between compose_email and send_email)
     _composed_subject: Optional[str]
@@ -312,6 +430,9 @@ class AgentState(TypedDict, total=False):
     _redirect_detected: Optional[bool]
     _redirect_email: Optional[str]
     _redirect_reason: Optional[str]
+
+    # Temporary: orchestration decision (multi-POC mode)
+    _orchestration_decision: Optional[dict[str, Any]]  # OrchestrationDecision as dict
 
 
 # ============================================================================
@@ -430,7 +551,7 @@ def all_conversations_complete(state: AgentState) -> bool:
 
 def get_active_poc(state: AgentState) -> Optional[str]:
     """
-    Get the first POC that needs processing.
+    Get the first POC that needs processing (legacy single-POC mode).
 
     Args:
         state: Current agent state.
