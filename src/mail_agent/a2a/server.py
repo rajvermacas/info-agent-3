@@ -26,7 +26,7 @@ from a2a.server.tasks import InMemoryTaskStore
 from mail_agent.a2a.agent_card import create_agent_card
 from mail_agent.a2a.executor import MailAgentA2AExecutor
 from mail_agent.a2a.progress_store import ProgressStore
-from mail_agent.a2a.routes import create_tasks_router, create_progress_router
+from mail_agent.a2a.routes import create_dag_router, create_progress_router, create_tasks_router
 from mail_agent.agent.graph import compile_mail_agent_graph
 from mail_agent.agent.nodes.wait_for_reply import set_a2a_mode, set_webhook_server
 from mail_agent.config import Settings, get_settings, configure_logging
@@ -160,19 +160,21 @@ async def create_a2a_application(
     app = app_builder.build()
     logger.info("A2A Starlette application built")
 
-    # 12. Mount task and progress routes as FastAPI sub-application
+    # 12. Mount task, progress, and DAG routes as FastAPI sub-application
     # FastAPI routes need FastAPI's dependency injection and routing,
     # so we mount a FastAPI app instead of converting routes manually.
     tasks_router = create_tasks_router(task_manager)
     progress_router = create_progress_router(progress_store)
+    dag_router = create_dag_router(task_manager, progress_store)
     from fastapi import FastAPI as TaskFastAPI
     from starlette.routing import Mount
     task_app = TaskFastAPI()
     task_app.include_router(tasks_router)
     task_app.include_router(progress_router)
-    # Mount at /api so routes become /api/tasks, /api/tasks/{task_id}, /api/tasks/{task_id}/progress
+    task_app.include_router(dag_router)
+    # Mount at /api so routes become /api/tasks, /api/tasks/{task_id}, /api/tasks/{task_id}/progress, /api/tasks/{task_id}/dag
     app.routes.append(Mount("/api", app=task_app))
-    logger.info("Task and progress routes mounted at /api/tasks")
+    logger.info("Task, progress, and DAG routes mounted at /api/tasks")
 
     return A2AServerResources(
         app=app,

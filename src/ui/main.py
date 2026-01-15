@@ -131,12 +131,14 @@ def create_app() -> FastAPI:
     from ui.routes.send_request import router as send_request_router
     from ui.routes.inbox import router as inbox_router
     from ui.routes.dashboard import router as dashboard_router
+    from ui.routes.dag import router as dag_router
     from ui.routes.sse import create_sse_router
 
     app.include_router(pages_router)
     app.include_router(send_request_router, prefix="/api")
     app.include_router(inbox_router, prefix="/api")
     app.include_router(dashboard_router, prefix="/api")
+    app.include_router(dag_router, prefix="/api")
 
     # Create SSE client and router during app creation (not in lifespan)
     # This ensures routes are registered BEFORE the app starts

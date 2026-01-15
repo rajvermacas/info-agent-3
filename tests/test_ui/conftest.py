@@ -144,10 +144,31 @@ def mock_smtp_client() -> AsyncMock:
 
 
 @pytest.fixture
+def mock_smtp_sender() -> MagicMock:
+    """Create a mock SMTP sender service."""
+    from ui.services.smtp_sender import SMTPSenderService
+
+    sender = MagicMock(spec=SMTPSenderService)
+    sender.send_email = MagicMock(return_value=None)
+    return sender
+
+
+@pytest.fixture
+def mock_sse_client() -> MagicMock:
+    """Create a mock SSE client service."""
+    from ui.services.sse_client import SSEClientService
+
+    client = MagicMock(spec=SSEClientService)
+    return client
+
+
+@pytest.fixture
 def test_client(
     settings: Settings,
     mock_a2a_client: AsyncMock,
     mock_smtp_client: AsyncMock,
+    mock_smtp_sender: MagicMock,
+    mock_sse_client: MagicMock,
 ) -> TestClient:
     """Create a test client with mocked dependencies."""
     import jinja2
@@ -170,6 +191,8 @@ def test_client(
         settings=settings,
         a2a_client=mock_a2a_client,
         smtp_client=mock_smtp_client,
+        smtp_sender=mock_smtp_sender,
+        sse_client=mock_sse_client,
         templates=templates,
     )
 
@@ -180,7 +203,8 @@ def test_client(
                 with patch("ui.routes.send_request.get_resources", return_value=resources):
                     with patch("ui.routes.inbox.get_resources", return_value=resources):
                         with patch("ui.routes.dashboard.get_resources", return_value=resources):
-                            from ui.main import create_app
-                            app = create_app()
-                            client = TestClient(app)
-                            yield client
+                            with patch("ui.routes.dag.get_resources", return_value=resources):
+                                from ui.main import create_app
+                                app = create_app()
+                                client = TestClient(app)
+                                yield client
