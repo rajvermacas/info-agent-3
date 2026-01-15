@@ -13,6 +13,7 @@ from mail_agent.agent.state import (
     RedirectInfo,
     get_conversation,
     get_parsed_request,
+    get_request_context,
     update_conversation,
 )
 from mail_agent.config import get_settings
@@ -51,6 +52,15 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
         # Get conversation state
         conversation = get_conversation(state, current_poc)
         parsed_request = get_parsed_request(state)
+        request_description, success_criteria, expected_format = get_request_context(
+            state, current_poc
+        )
+        if not request_description:
+            request_description = parsed_request.request_description
+        if not success_criteria:
+            success_criteria = parsed_request.success_criteria
+        if not expected_format:
+            expected_format = parsed_request.expected_format
 
         # Update status
         conversation.status = "composing"
@@ -77,7 +87,7 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
             )
 
             prompt = PromptTemplates.compose_followup(
-                request_description=parsed_request.request_description,
+                request_description=request_description,
                 validation_feedback=last_validation.feedback,
                 missing_items=last_validation.missing_items,
                 attempt_count=conversation.attempt_count + 1,
@@ -111,9 +121,9 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
 
                 prompt = PromptTemplates.compose_email_for_redirect(
                     poc_email=current_poc,
-                    request_description=parsed_request.request_description,
-                    expected_format=parsed_request.expected_format,
-                    success_criteria=parsed_request.success_criteria,
+                    request_description=request_description,
+                    expected_format=expected_format,
+                    success_criteria=success_criteria,
                     referrer_email=conversation.redirected_from.original_poc,
                     redirect_reason=conversation.redirected_from.redirect_reason,
                 )
@@ -123,9 +133,9 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
 
                 prompt = PromptTemplates.compose_email(
                     poc_email=current_poc,
-                    request_description=parsed_request.request_description,
-                    expected_format=parsed_request.expected_format,
-                    success_criteria=parsed_request.success_criteria,
+                    request_description=request_description,
+                    expected_format=expected_format,
+                    success_criteria=success_criteria,
                 )
 
             # Format system prompt with agent email identity

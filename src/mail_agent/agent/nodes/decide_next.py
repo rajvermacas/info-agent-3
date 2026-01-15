@@ -181,6 +181,8 @@ async def prepare_followup(state: AgentState) -> dict[str, Any]:
 
     try:
         conversation = get_conversation(state, current_poc)
+        # Mark as pending so the orchestrator can schedule the follow-up send.
+        conversation.status = "pending"
 
         progress_msg = (
             f"Preparing follow-up email for {current_poc} "
@@ -189,6 +191,7 @@ async def prepare_followup(state: AgentState) -> dict[str, Any]:
 
         # Status will be updated by compose_email
         return {
+            "conversations": update_conversation(state, current_poc, conversation),
             "current_node": "prepare_followup",
             "progress_messages": [progress_msg],
         }

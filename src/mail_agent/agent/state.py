@@ -263,6 +263,18 @@ class AgentState(TypedDict, total=False):
     # Parsed request (set by parse_instruction node)
     parsed_request: Optional[dict[str, Any]]
 
+    # Multi-contact plan/contract (set by compile_contract node)
+    # - contract: compiled plan and global success criteria
+    contract: Optional[dict[str, Any]]
+    # - per-POC request context overrides inferred from the contract
+    poc_request_contexts: Optional[dict[str, dict[str, str]]]
+    # - global validation outputs / progress
+    global_validation: Optional[dict[str, Any]]
+    global_valid: Optional[bool]
+
+    # Orchestrator routing hint (set by orchestrate node)
+    orchestrator_next: Optional[str]
+
     # Per-POC conversation state
     # Key: POC email address, Value: ConversationState as dict
     conversations: dict[str, dict[str, Any]]
@@ -332,6 +344,10 @@ def create_initial_state(user_instruction: str) -> AgentState:
     return AgentState(
         user_instruction=user_instruction,
         parsed_request=None,
+        contract=None,
+        poc_request_contexts=None,
+        global_validation=None,
+        global_valid=None,
         conversations={},
         current_node="start",
         current_poc=None,
@@ -403,6 +419,26 @@ def get_parsed_request(state: AgentState) -> ParsedRequest:
     if parsed_dict is None:
         raise ValueError("parsed_request is not set in state")
     return ParsedRequest.from_dict(parsed_dict)
+
+
+def get_request_context(state: AgentState, poc_email: str) -> tuple[str, str, str]:
+    """
+    Get the request context (description, success_criteria, expected_format) for a POC.
+
+    Uses contract-inferred per-POC context when available; otherwise falls back
+    to the parsed_request (single-POC behavior).
+    """
+    contexts = state.get("poc_request_contexts") or {}
+    context = contexts.get(poc_email)
+    if context:
+        return (
+            context.get("request_description", ""),
+            context.get("success_criteria", ""),
+            context.get("expected_format", ""),
+        )
+
+    parsed = get_parsed_request(state)
+    return (parsed.request_description, parsed.success_criteria, parsed.expected_format)
 
 
 def all_conversations_complete(state: AgentState) -> bool:

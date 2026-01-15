@@ -13,6 +13,7 @@ from mail_agent.agent.state import (
     ValidationResult,
     get_conversation,
     get_parsed_request,
+    get_request_context,
     update_conversation,
 )
 from mail_agent.config import get_settings
@@ -55,8 +56,14 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
         conversation = get_conversation(state, current_poc)
         conversation.status = "validating"
 
-        # Get parsed request
         parsed_request = get_parsed_request(state)
+        request_description, success_criteria, _expected_format = get_request_context(
+            state, current_poc
+        )
+        if not request_description:
+            request_description = parsed_request.request_description
+        if not success_criteria:
+            success_criteria = parsed_request.success_criteria
 
         # Get extracted content from state
         extracted_content = state.get("_extracted_content", "")
@@ -79,8 +86,8 @@ async def validate_response(state: AgentState) -> dict[str, Any]:
 
         # Generate validation prompt
         prompt = PromptTemplates.validate_response(
-            request_description=parsed_request.request_description,
-            success_criteria=parsed_request.success_criteria,
+            request_description=request_description,
+            success_criteria=success_criteria,
             extracted_content=extracted_content,
             row_count=row_count,
             headers=headers,

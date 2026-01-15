@@ -1,8 +1,11 @@
 """
 LangGraph State Machine - Mail Agent graph definition.
 
-Defines the complete state machine for the mail agent workflow.
-Includes support for email redirects when POC suggests another contact.
+Defines the state machine for:
+- Multi-contact dispatch (send to multiple POCs without waiting after each send)
+- Interrupt-based waiting for replies (non-blocking A2A)
+- Per-POC validation + follow-ups (max attempts)
+- Global validation across POCs before final completion
 """
 
 import logging
@@ -10,14 +13,17 @@ from typing import Any, Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from mail_agent.agent.state import AgentState, all_conversations_complete
+from mail_agent.agent.state import AgentState
 from mail_agent.agent.nodes.parse_instruction import parse_instruction
+from mail_agent.agent.nodes.compile_contract import compile_contract
+from mail_agent.agent.nodes.orchestrate import orchestrate
 from mail_agent.agent.nodes.compose_email import compose_email
 from mail_agent.agent.nodes.send_email import send_email
-from mail_agent.agent.nodes.wait_for_reply import wait_for_reply
+from mail_agent.agent.nodes.wait_for_any_reply import wait_for_any_reply
 from mail_agent.agent.nodes.fetch_email import fetch_email
 from mail_agent.agent.nodes.extract_content import extract_content
 from mail_agent.agent.nodes.validate_response import validate_response
+from mail_agent.agent.nodes.validate_global import validate_global
 from mail_agent.agent.nodes.decide_next import (
     decide_next,
     handle_success,
@@ -32,25 +38,20 @@ from mail_agent.agent.nodes.send_success_reply import send_success_reply
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# Routing Functions
-# ============================================================================
-
-
-def route_after_parse(state: AgentState) -> Literal["compose_email", "end"]:
-    """Route after parsing instruction."""
+def route_after_parse(state: AgentState) -> Literal["compile_contract", "end"]:
     error = state.get("error")
-    if error:
-        logger.debug("Routing after parse: error -> end")
+    if error or state.get("parsed_request") is None:
         return "end"
+    return "compile_contract"
 
-    parsed_request = state.get("parsed_request")
-    if parsed_request is None:
-        logger.debug("Routing after parse: no request -> end")
-        return "end"
 
-    logger.debug("Routing after parse: -> compose_email")
-    return "compose_email"
+def route_after_orchestrate(
+    state: AgentState,
+) -> Literal["compose_email", "wait_for_any_reply", "validate_global", "end"]:
+    next_step = state.get("orchestrator_next")
+    if next_step in ("compose_email", "wait_for_any_reply", "validate_global"):
+        return next_step  # type: ignore[return-value]
+    return "end"
 
 
 def route_after_validation(
@@ -69,22 +70,17 @@ def route_after_validation(
         return "prepare_followup"
 
 
-def route_after_terminal(state: AgentState) -> Literal["end"]:
-    """
-    Route after terminal state (success/failure).
-
-    For now, we only support single POC, so always go to end.
-    For multi-POC support, this would check if other POCs need processing.
-    """
-    # Check if all conversations are complete
-    if all_conversations_complete(state):
-        logger.debug("All conversations complete -> end")
-        return "end"
-
-    # For multi-POC support (future):
-    # Would return to compose_email for next POC
-    logger.debug("Routing to end (single POC mode)")
-    return "end"
+def route_after_validation(
+    state: AgentState,
+) -> Literal["handle_success", "handle_failure", "prepare_followup", "handle_redirect"]:
+    result = decide_next(state)
+    if result == "success":
+        return "handle_success"
+    if result == "failure":
+        return "handle_failure"
+    if result == "redirect":
+        return "handle_redirect"
+    return "prepare_followup"
 
 
 # ============================================================================
@@ -100,18 +96,13 @@ def create_mail_agent_graph() -> StateGraph:
         Compiled StateGraph ready for execution.
 
     Graph Structure:
-        START -> parse_instruction -> compose_email -> send_email -> wait_for_reply
-              -> fetch_email -> extract_content -> validate_response
-              -> [handle_success | handle_failure | prepare_followup | handle_redirect]
-              -> END (or loop back to compose_email for followup/redirect)
-
-    Success Flow:
-        When POC's response is validated as satisfactory:
-        validate_response -> handle_success -> compose_success_reply -> send_success_reply -> END
-
-    Redirect Flow:
-        When a POC responds with "I'm not the right contact, email xyz@abc.com":
-        validate_response -> handle_redirect -> compose_email (for new POC)
+        START -> parse_instruction -> compile_contract -> orchestrate
+        orchestrate -> [compose_email -> send_email -> orchestrate]*
+        orchestrate -> wait_for_any_reply -> fetch_email -> extract_content -> validate_response
+                    -> [handle_success | handle_failure | prepare_followup | handle_redirect]
+                    -> [compose_success_reply -> send_success_reply]?
+                    -> orchestrate
+        orchestrate -> validate_global -> orchestrate -> END
     """
     logger.info("Creating mail agent graph")
 
@@ -124,16 +115,19 @@ def create_mail_agent_graph() -> StateGraph:
 
     # Phase 1: Parse user instruction
     graph.add_node("parse_instruction", parse_instruction)
+    graph.add_node("compile_contract", compile_contract)
+    graph.add_node("orchestrate", orchestrate)
 
     # Phase 2: Compose and send email
     graph.add_node("compose_email", compose_email)
     graph.add_node("send_email", send_email)
 
     # Phase 3: Wait for and process reply
-    graph.add_node("wait_for_reply", wait_for_reply)
+    graph.add_node("wait_for_any_reply", wait_for_any_reply)
     graph.add_node("fetch_email", fetch_email)
     graph.add_node("extract_content", extract_content)
     graph.add_node("validate_response", validate_response)
+    graph.add_node("validate_global", validate_global)
 
     # Phase 4: Handle result
     graph.add_node("handle_success", handle_success)
@@ -152,24 +146,39 @@ def create_mail_agent_graph() -> StateGraph:
     # Start -> Parse
     graph.add_edge(START, "parse_instruction")
 
-    # Parse -> Compose (conditional)
+    # Parse -> Compile contract (conditional)
     graph.add_conditional_edges(
         "parse_instruction",
         route_after_parse,
         {
-            "compose_email": "compose_email",
+            "compile_contract": "compile_contract",
             "end": END,
         },
     )
 
-    # Linear flow: Compose -> Send -> Wait -> Fetch -> Extract -> Validate
+    graph.add_edge("compile_contract", "orchestrate")
+
+    graph.add_conditional_edges(
+        "orchestrate",
+        route_after_orchestrate,
+        {
+            "compose_email": "compose_email",
+            "wait_for_any_reply": "wait_for_any_reply",
+            "validate_global": "validate_global",
+            "end": END,
+        },
+    )
+
+    # Compose -> Send -> back to orchestrate (dispatch without waiting)
     graph.add_edge("compose_email", "send_email")
-    graph.add_edge("send_email", "wait_for_reply")
-    graph.add_edge("wait_for_reply", "fetch_email")
+    graph.add_edge("send_email", "orchestrate")
+
+    # Wait -> Fetch -> Extract -> Validate
+    graph.add_edge("wait_for_any_reply", "fetch_email")
     graph.add_edge("fetch_email", "extract_content")
     graph.add_edge("extract_content", "validate_response")
 
-    # Validate -> Decision (conditional)
+    # Validate -> Decision (conditional, per POC)
     graph.add_conditional_edges(
         "validate_response",
         route_after_validation,
@@ -181,19 +190,17 @@ def create_mail_agent_graph() -> StateGraph:
         },
     )
 
-    # Success path -> Compose and send acknowledgment -> End
+    # Success path -> Compose and send acknowledgment -> back to orchestrate
     graph.add_edge("handle_success", "compose_success_reply")
     graph.add_edge("compose_success_reply", "send_success_reply")
-    graph.add_edge("send_success_reply", END)
+    graph.add_edge("send_success_reply", "orchestrate")
 
-    # Failure -> End
-    graph.add_edge("handle_failure", END)
+    graph.add_edge("handle_failure", "orchestrate")
+    graph.add_edge("prepare_followup", "orchestrate")
+    graph.add_edge("handle_redirect", "orchestrate")
 
-    # Followup -> Back to compose
-    graph.add_edge("prepare_followup", "compose_email")
-
-    # Redirect -> Back to compose (for new POC)
-    graph.add_edge("handle_redirect", "compose_email")
+    # Global validate always returns to orchestrate (which will end on success or chase on fail)
+    graph.add_edge("validate_global", "orchestrate")
 
     logger.info("Mail agent graph created successfully")
     return graph

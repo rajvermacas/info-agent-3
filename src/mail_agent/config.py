@@ -6,6 +6,7 @@ All settings can be overridden with MAIL_AGENT_ prefix.
 """
 
 import logging
+import os
 from enum import Enum
 from functools import lru_cache
 from typing import Optional
@@ -35,8 +36,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="MAIL_AGENT_",
-        env_file=".env",
-        env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
@@ -146,7 +145,7 @@ class Settings(BaseSettings):
 
     # Agent Behavior
     max_attempts: int = Field(
-        default=5,
+        default=10,
         ge=1,
         le=10,
         description="Maximum conversation attempts before giving up",
@@ -283,7 +282,8 @@ def get_settings() -> Settings:
         ValidationError: If settings validation fails.
     """
     logger.debug("Loading Mail Agent settings")
-    settings = Settings()
+    env_file = os.getenv("MAIL_AGENT_ENV_FILE")
+    settings = Settings(_env_file=env_file) if env_file else Settings()
     logger.info(
         f"Settings loaded: api_url={settings.mock_smtp_api_url}, "
         f"agent_email={settings.agent_email}, "

@@ -195,9 +195,15 @@ class TaskManager:
                 await self._handle_expired_task(task["task_id"], task["poc_email"])
                 expired += 1
             else:
-                # Restore to in-memory mapping
-                async with self._lock:
-                    self._poc_to_task[task["poc_email"]] = task["task_id"]
+                interrupt_data = task.get("interrupt_data") or {}
+                poc_emails = interrupt_data.get("poc_emails")
+                if isinstance(poc_emails, list) and poc_emails:
+                    async with self._lock:
+                        for email in poc_emails:
+                            self._poc_to_task[str(email).lower()] = task["task_id"]
+                else:
+                    async with self._lock:
+                        self._poc_to_task[task["poc_email"]] = task["task_id"]
                 restored += 1
 
         logger.info(f"Restored {restored} suspended tasks, cleaned up {expired} expired")
@@ -229,22 +235,31 @@ class TaskManager:
             TaskManagerError: If task cannot be suspended.
         """
         poc_email_lower = poc_email.lower()
+        poc_emails = (interrupt_data or {}).get("poc_emails")
 
         logger.info(
             f"Suspending task {task_id} waiting for reply from {poc_email}"
         )
 
         async with self._lock:
-            # Check for duplicate POC registration
-            if poc_email_lower in self._poc_to_task:
-                existing_task = self._poc_to_task[poc_email_lower]
-                if existing_task != task_id:
-                    raise TaskManagerError(
-                        f"POC {poc_email} already has pending task {existing_task}"
-                    )
-
-            # Register in memory
-            self._poc_to_task[poc_email_lower] = task_id
+            if isinstance(poc_emails, list) and poc_emails:
+                for email in poc_emails:
+                    email_lower = str(email).lower()
+                    if email_lower in self._poc_to_task:
+                        existing_task = self._poc_to_task[email_lower]
+                        if existing_task != task_id:
+                            raise TaskManagerError(
+                                f"POC {email} already has pending task {existing_task}"
+                            )
+                    self._poc_to_task[email_lower] = task_id
+            else:
+                if poc_email_lower in self._poc_to_task:
+                    existing_task = self._poc_to_task[poc_email_lower]
+                    if existing_task != task_id:
+                        raise TaskManagerError(
+                            f"POC {poc_email} already has pending task {existing_task}"
+                        )
+                self._poc_to_task[poc_email_lower] = task_id
 
         # Persist to database
         try:
@@ -311,10 +326,15 @@ class TaskManager:
             await self._handle_expired_task(task_id, sender)
             return False
 
-        # Remove from suspended state before resuming
+        # Remove all mappings for this task before resuming to avoid concurrent resumes.
+        interrupt_data = task_info.get("interrupt_data") or {}
+        mapped_pocs = interrupt_data.get("poc_emails")
         async with self._lock:
-            if sender in self._poc_to_task:
-                del self._poc_to_task[sender]
+            if isinstance(mapped_pocs, list) and mapped_pocs:
+                for email in mapped_pocs:
+                    self._poc_to_task.pop(str(email).lower(), None)
+            else:
+                self._poc_to_task.pop(sender, None)
 
         await self._task_store.remove_suspended_task(task_id)
 
@@ -490,7 +510,7 @@ class TaskManager:
         # LangGraph returns different formats during resume vs initial execution
         raw_interrupt = event.get("__interrupt__", {})
         interrupt_data = self._parse_interrupt_info(raw_interrupt)
-        poc_email = interrupt_data.get("poc_email")
+        poc_email = interrupt_data.get("routing_key") or interrupt_data.get("poc_email")
 
         if poc_email:
             await self.suspend_task(
@@ -533,12 +553,19 @@ class TaskManager:
         if suspended:
             created_at = datetime.fromisoformat(suspended["created_at"])
             expires_at = datetime.fromisoformat(suspended["expires_at"])
+            interrupt_data = suspended.get("interrupt_data") or {}
+            poc_emails = interrupt_data.get("poc_emails")
+            poc_display = (
+                ", ".join(poc_emails[:3]) + ("..." if len(poc_emails) > 3 else "")
+                if isinstance(poc_emails, list) and poc_emails
+                else suspended["poc_email"]
+            )
 
             return TaskStatus(
                 task_id=task_id,
                 state=TaskState.SUSPENDED,
-                message=f"Waiting for reply from {suspended['poc_email']}",
-                poc_email=suspended["poc_email"],
+                message=f"Waiting for reply from {poc_display}",
+                poc_email=poc_display,
                 created_at=created_at,
                 expires_at=expires_at,
             )

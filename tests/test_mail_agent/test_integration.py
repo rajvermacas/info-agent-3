@@ -108,15 +108,18 @@ class TestGraphCreation:
 
         expected_nodes = [
             "parse_instruction",
+            "compile_contract",
+            "orchestrate",
             "compose_email",
             "send_email",
-            "wait_for_reply",
+            "wait_for_any_reply",
             "fetch_email",
             "extract_content",
             "validate_response",
             "handle_success",
             "handle_failure",
             "prepare_followup",
+            "validate_global",
         ]
 
         for node_name in expected_nodes:

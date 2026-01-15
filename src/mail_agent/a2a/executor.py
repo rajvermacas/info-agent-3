@@ -233,12 +233,20 @@ class MailAgentA2AExecutor(AgentExecutor):
 
                 # Suspend the task
                 poc_email = interrupt_data.get("poc_email")
+                routing_key = interrupt_data.get("routing_key")
                 if poc_email:
                     await self.task_manager.suspend_task(
                         task_id=task_id,
-                        poc_email=poc_email,
+                        poc_email=routing_key or poc_email,
                         thread_id=task_id,  # Use task_id as thread_id
                         interrupt_data=interrupt_data,
+                    )
+
+                    poc_emails = interrupt_data.get("poc_emails")
+                    wait_msg = (
+                        f"Waiting for replies from {len(poc_emails)} contact(s)."
+                        if isinstance(poc_emails, list) and len(poc_emails) > 1
+                        else f"Waiting for reply from {poc_email}."
                     )
 
                     # Emit suspended event
@@ -247,7 +255,7 @@ class MailAgentA2AExecutor(AgentExecutor):
                         SSEEvent(
                             task_id=task_id,
                             state=TaskState.SUSPENDED,
-                            message=f"Waiting for reply from {poc_email}. Poll GET /tasks/{task_id} for result.",
+                            message=f"{wait_msg} Poll GET /tasks/{task_id} for result.",
                             poc_email=poc_email,
                         ),
                     )
