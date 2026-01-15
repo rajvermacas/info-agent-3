@@ -15,10 +15,53 @@ from mail_agent.agent.multi_poc_helpers import (
     update_poc_state,
 )
 from mail_agent.agent.multi_poc_state import POCStatus
-from mail_agent.agent.state import AgentState
+from mail_agent.agent.state import AgentState, ConversationState, ParsedRequest
 
 
 logger = logging.getLogger(__name__)
+
+
+def _initialize_legacy_bridge(
+    state: AgentState,
+    poc_email: str,
+    requirement: Any,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """
+    Initialize legacy single-POC state fields for downstream nodes.
+
+    This bridges the multi-POC orchestration state to the legacy single-POC
+    nodes (compose_email, send_email, etc.) which expect conversations and
+    parsed_request to be set.
+
+    Args:
+        state: Current agent state.
+        poc_email: POC email address being processed.
+        requirement: POCRequirement for this POC.
+
+    Returns:
+        Tuple of (conversations dict, parsed_request dict).
+    """
+    # Get or initialize conversations dict
+    conversations = dict(state.get("conversations", {}))
+
+    # Initialize conversation for this POC if not exists
+    if poc_email not in conversations:
+        conv = ConversationState(poc_email=poc_email, status="pending")
+        conversations[poc_email] = conv.to_dict()
+        logger.info(f"Initialized conversation for POC: {poc_email}")
+    else:
+        logger.debug(f"Conversation already exists for POC: {poc_email}")
+
+    # Create parsed_request from POC requirement for legacy nodes
+    parsed_request = ParsedRequest(
+        poc_emails=[poc_email],
+        request_type="data_request",  # Default type for multi-POC
+        request_description=requirement.request,
+        success_criteria=requirement.success_criteria,
+        expected_format="text",  # Default format
+    )
+
+    return conversations, parsed_request.to_dict()
 
 
 async def inject_poc_context(state: AgentState) -> dict[str, Any]:
@@ -54,12 +97,25 @@ async def inject_poc_context(state: AgentState) -> dict[str, Any]:
         current_requirement = get_poc_requirement(state, current_poc_id)
         current_poc_state = get_poc_state(state, current_poc_id)
 
+        # Bridge multi-POC to legacy: set current_poc (email) for downstream nodes
+        poc_email = current_requirement.email
+        logger.debug(f"Bridging POC ID {current_poc_id} to email {poc_email}")
+
         # Get list of dependencies
         dependencies = current_requirement.dependencies
 
         if not dependencies:
             logger.info(f"POC {current_poc_id} has no dependencies. No context to inject.")
+
+            # Initialize legacy bridge data for downstream nodes
+            conversations, parsed_request = _initialize_legacy_bridge(
+                state, poc_email, current_requirement
+            )
+
             return {
+                "current_poc": poc_email,  # Bridge to legacy nodes
+                "conversations": conversations,  # Bridge to legacy nodes
+                "parsed_request": parsed_request,  # Bridge to legacy nodes
                 "current_node": "inject_poc_context",
                 "progress_messages": [
                     f"POC {current_poc_id}: No dependencies, skipping context injection"
@@ -162,7 +218,19 @@ async def inject_poc_context(state: AgentState) -> dict[str, Any]:
             f"{len(context)} data items from {len(dependencies) - len(missing_deps)} deps"
         )
 
+        # Initialize legacy bridge data for downstream nodes
+        # Use the updated requirement with merged context
+        updated_requirement = next(
+            poc for poc in updated_pocs if poc.id == current_poc_id
+        )
+        conversations, parsed_request = _initialize_legacy_bridge(
+            state, poc_email, updated_requirement
+        )
+
         return {
+            "current_poc": poc_email,  # Bridge to legacy nodes
+            "conversations": conversations,  # Bridge to legacy nodes
+            "parsed_request": parsed_request,  # Bridge to legacy nodes
             "execution_plan": updated_plan.to_dict(),
             "poc_states": updated_poc_states,
             "current_node": "inject_poc_context",
