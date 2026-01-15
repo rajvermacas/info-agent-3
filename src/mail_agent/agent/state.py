@@ -378,6 +378,9 @@ class AgentState(TypedDict, total=False):
     # Current orchestration phase
     orchestration_phase: Optional[str]  # planning, execution, aggregation, completion
 
+    # Orchestration decision for routing (set by orchestrate_pocs node)
+    orchestration_decision: Optional[dict[str, Any]]  # OrchestrationDecision as dict
+
     # =========================================================================
     # Common Fields (Both Modes)
     # =========================================================================
@@ -430,9 +433,6 @@ class AgentState(TypedDict, total=False):
     _redirect_detected: Optional[bool]
     _redirect_email: Optional[str]
     _redirect_reason: Optional[str]
-
-    # Temporary: orchestration decision (multi-POC mode)
-    _orchestration_decision: Optional[dict[str, Any]]  # OrchestrationDecision as dict
 
 
 # ============================================================================
