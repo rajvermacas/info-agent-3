@@ -1,3 +1,103 @@
+You are a Senior Architect with more than 15 years of experience in Software Development.
+As a Senior Architect, discuss with me. DO NOT START CODING. I just need a brainstorming session with you.
+
+- You shoud ask me releveant pin pointed questions with default answer attached to it.
+- You should also give me some questions to consider in current requirements for improving the quality/experience
+
+**IMPORTANT AND MUST BE FOLLOWED AT ANY COST**  
+- Think hard about the requirement.  
+- Do not write code. Write algorithms.
+- We should leverage existing battle-tested frameworks rather than reinventing the wheel.
+- Keep the architecture lean and concise.
+- Create ascii diagram for visual representation of the execution flow.
+- Include clearly all the integration points with their corresponding API contracts.
+- Include technology stack, frameworks and sdks in the architecture.
+
+Requirement:
 Right now I cannot ask the mail agent to go and send mails to more than one point of contact and get some subset of data from 1 contact and another remaining from other contact. and then finally validate if data from both the contacts constitute towards the final correct data or not.
 
 I want to implement this feature.
+-----------------------------------
+
+We already have a developed project. Expore the project to get an understanding 
+
+1. How do you identify “contacts” for a request (static list, CRM lookup, user-provided)?
+
+  - Default: user provides 2–5 recipients per request.
+
+  2. Do you need sequential (contact A first, then B) or parallel outreach?
+
+  - Default: parallel outreach with per-contact deadlines.
+
+  3. How do you decide which fields come from which contact (explicit mapping vs inferred)?
+
+  - It will be mentioned in the user request.
+
+  4. Are replies always email, or can it include attachments (PDF/Excel) / forwarded threads?
+
+  - Default: email body + common attachments (csv) allowed.
+
+  5. What is the “final correct data” definition: exact match to a known truth, or consistency rules (e.g., totals reconcile)?
+
+  - rule-based validation (schema + cross-field constraints), not external truth. The validation criteria should be provided by the user request.
+
+  6. How strict should extraction be (ask follow-ups automatically if missing/ambiguous)?
+
+  - Default: auto-follow-up once per missing field; then escalate to human.
+
+  7. Identity/trust: do you require DKIM/DMARC alignment, known sender allowlist, or signed responses?
+
+  - Default: allowlist contacts + sender-email exact match.
+
+  8. Timeouts and completion: when do we finalize—after all contacts reply, or when required fields are satisfied?
+
+  - Default: finalize when all required fields are satisfied or SLA expires.
+
+  9. What should happen on conflicts (two contacts provide different values for same field)?
+
+  - “ask clarification” from the point of contact.
+
+  10. Audit requirement: do you need full traceability of which contact provided which value?
+
+  - Default: yes, store provenance per field.
+  ---------------------------------------
+
+  1. How do you decide which data comes from which contact?
+     Default: User specifies a mapping: field_group -> contact (e.g., “Pricing from Finance, Timeline from PM”).
+
+  2. What happens if contacts provide overlapping/conflicting values?
+     Default: Then email the involved poc's mentioning that others have sent this data. Please check yours.
+
+  3. Is the final output a strict schema (typed fields) or free-form text?
+     What do you mean in this question?
+
+  4. What’s the expected interaction model? (fully automated vs confirm steps)
+     Default: Automated collection; no human in the loop once the request is submitted.
+
+  5. Timeouts and partial success: how long to wait for replies?
+     Default: SLA window (e.g., 24h) + periodic reminders; produce partial result with “missing fields” list.
+
+  6. Authentication/authorization: can the agent email anyone or only from an allowlist?
+     Default: anyone
+
+  7. Validation definition: what does “final correct data” mean?
+     It will be provided by the user request and LLM needs to understand it for validation criteria.
+
+  8. Do you need to ask follow-up questions if data is incomplete?
+     Default: Yes—generate targeted follow-ups per missing/invalid field and send to the most relevant contact.
+------------------------------------------
+
+ 1. How will the user provide the schema-ish “field_groups”? UI form, JSON, or free-text parsed?
+     User will provide something like "send mail to raj@gmail.com asking 10 animal names in a csv file with the animal name and cost"
+
+  2. What is your deterministic tie-breaker if conflict persists (no human-in-loop)?
+     Based on what was the request by the end user. LLM reasons on what correct data looks like and take a decision and also asks the point of contact for the conflicting information and checks again.
+
+  3. How do you detect “confirmation” vs “new conflicting value”?
+     Default: email template requires “Field: Value” lines; confirmation means replying with the same key and a single value.
+
+  4. Do you allow multiple rounds of conflict emails?
+     Default: max 10 rounds, then finalize partial with conflict flagged.
+
+  5. Email anyone: do you still want minimal safeguards (domain allowlist, rate limits, user confirmation on new recipients)?
+     no limit
