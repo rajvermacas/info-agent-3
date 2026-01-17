@@ -107,6 +107,7 @@ class PromptTemplates:
     PARSE_SYSTEM = """You are an assistant that extracts structured information from user requests.
 You must extract email addresses, understand what is being requested, and define clear success criteria.
 Be specific about success criteria (e.g., "10 rows of data" not just "data").
+If the user includes an "Expected execution plan", treat it as guidance for what the user wants to happen.
 Always respond with the requested JSON structure."""
 
     COMPOSE_SYSTEM = """You are an Information Gathering Agent sending emails on behalf of your organization.
@@ -276,6 +277,8 @@ Received response content:
 - Headers/Columns: {', '.join(headers)}
 - Data preview:
 {extracted_content[:max_content_chars]}{"..." if len(extracted_content) > max_content_chars else ""}
+
+Important: Judge success based on the CONTENT only. If the content is correct, it is valid whether it was provided as an attachment or pasted into the email body.
 
 FIRST, check if this is a REDIRECT:
 - Does the email body say they are not the correct contact?

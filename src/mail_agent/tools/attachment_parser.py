@@ -46,20 +46,20 @@ class ParsedContent:
     headers: list[str]
     rows: list[dict[str, Any]]
     row_count: int
+    raw_text: Optional[str] = None
 
     def to_json(self) -> str:
         """Convert parsed content to JSON string."""
-        return json.dumps(
-            {
-                "filename": self.filename,
-                "type": self.content_type,
-                "headers": self.headers,
-                "row_count": self.row_count,
-                "data": self.rows,
-            },
-            indent=2,
-            default=str,  # Handle datetime and other non-serializable types
-        )
+        payload: dict[str, Any] = {
+            "filename": self.filename,
+            "type": self.content_type,
+            "headers": self.headers,
+            "row_count": self.row_count,
+            "data": self.rows,
+        }
+        if self.raw_text is not None:
+            payload["raw_text"] = self.raw_text
+        return json.dumps(payload, indent=2, default=str)
 
     def to_text(self) -> str:
         """Convert parsed content to human-readable text."""
@@ -248,56 +248,8 @@ class AttachmentParser:
 
         try:
             decoded_bytes = self._decode_base64(content_base64)
-
-            # Try UTF-8 first, fallback to latin-1
-            try:
-                text_content = decoded_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                logger.debug("UTF-8 decode failed, trying latin-1")
-                text_content = decoded_bytes.decode("latin-1")
-
-            # Use csv.DictReader to parse
-            string_io = io.StringIO(text_content)
-
-            # Detect delimiter
-            sample = text_content[:1024]
-            try:
-                dialect = csv.Sniffer().sniff(sample)
-                delimiter = dialect.delimiter
-            except csv.Error:
-                # Default to comma if sniffing fails
-                delimiter = ","
-            logger.debug(f"CSV delimiter detected: '{delimiter}'")
-
-            string_io.seek(0)
-            reader = csv.DictReader(string_io, delimiter=delimiter)
-
-            if reader.fieldnames is None:
-                logger.warning(f"CSV file has no headers: {filename}")
-                return ParsedContent(
-                    content_type="csv",
-                    filename=filename,
-                    headers=[],
-                    rows=[],
-                    row_count=0,
-                )
-
-            headers = list(reader.fieldnames)
-            data_rows = [row for row in reader]
-
-            result = ParsedContent(
-                content_type="csv",
-                filename=filename,
-                headers=headers,
-                rows=data_rows,
-                row_count=len(data_rows),
-            )
-
-            logger.info(
-                f"CSV parsed successfully: {filename}, "
-                f"headers={headers}, rows={len(data_rows)}"
-            )
-            return result
+            text_content = self._decode_text(decoded_bytes)
+            return self.parse_csv_text(filename=filename, text_content=text_content)
 
         except CorruptedFileError:
             raise
@@ -305,6 +257,89 @@ class AttachmentParser:
             error_msg = f"Failed to parse CSV file '{filename}': {e}"
             logger.error(error_msg)
             raise CorruptedFileError(error_msg) from e
+
+    def _decode_text(self, decoded_bytes: bytes) -> str:
+        try:
+            return decoded_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.debug("UTF-8 decode failed, trying latin-1")
+            return decoded_bytes.decode("latin-1")
+
+    def _sniff_csv_delimiter(self, sample: str) -> str:
+        try:
+            return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+        except csv.Error:
+            return ","
+
+    def _sniff_has_header(self, sample: str) -> bool:
+        try:
+            return csv.Sniffer().has_header(sample)
+        except csv.Error:
+            return False
+
+    def _truncate_raw_text(self, text: str, max_chars: int = 20000) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "...(truncated)"
+
+    def parse_csv_text(self, filename: str, text_content: str) -> ParsedContent:
+        """
+        Parse CSV content provided as text (e.g., from an email body).
+
+        Handles headerless CSV by generating generic column names.
+        """
+        sample = text_content[:4096]
+        delimiter = self._sniff_csv_delimiter(sample)
+        has_header = self._sniff_has_header(sample)
+        logger.debug(f"CSV delimiter detected: '{delimiter}', has_header={has_header}")
+
+        reader = csv.reader(io.StringIO(text_content), delimiter=delimiter)
+        raw_rows = [r for r in reader if any((c or "").strip() for c in r)]
+        if not raw_rows:
+            return ParsedContent(
+                content_type="csv",
+                filename=filename,
+                headers=[],
+                rows=[],
+                row_count=0,
+                raw_text=self._truncate_raw_text(text_content),
+            )
+
+        max_cols = max(len(r) for r in raw_rows)
+        normalized = [r + [""] * (max_cols - len(r)) for r in raw_rows]
+
+        if max_cols == 1 and len(normalized) >= 2:
+            first_cell = (normalized[0][0] or "").strip().lower()
+            if first_cell in {"animal", "animals", "animal_name", "animal_names", "name", "names"}:
+                has_header = True
+
+        if has_header and len(normalized) >= 2:
+            headers = [
+                (h or "").strip() or f"Column_{i}" for i, h in enumerate(normalized[0])
+            ]
+            data_rows = normalized[1:]
+        else:
+            headers = [f"Column_{i}" for i in range(max_cols)]
+            data_rows = normalized
+
+        rows = [
+            {headers[i]: (cell or "").strip() for i, cell in enumerate(row)}
+            for row in data_rows
+            if any((cell or "").strip() for cell in row)
+        ]
+
+        result = ParsedContent(
+            content_type="csv",
+            filename=filename,
+            headers=headers,
+            rows=rows,
+            row_count=len(rows),
+            raw_text=self._truncate_raw_text(text_content),
+        )
+        logger.info(
+            f"CSV parsed successfully: {filename}, headers={headers}, rows={len(rows)}"
+        )
+        return result
 
     def parse_from_attachment_object(
         self,

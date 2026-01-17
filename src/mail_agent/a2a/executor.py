@@ -306,26 +306,22 @@ class MailAgentA2AExecutor(AgentExecutor):
                 if final_state is None:
                     final_state = dict(initial_state)
                 final_state.update(node_output)
+        final_state = final_state or {}
 
-                # Check for terminal nodes
-                if node_name in ("handle_success", "handle_failure"):
-                    # Task completed
-                    is_success = node_name == "handle_success"
-                    state = TaskState.COMPLETED if is_success else TaskState.FAILED
+        success = not final_state.get("error")
+        await self._emit_sse_event(
+            event_queue,
+            SSEEvent(
+                task_id=task_id,
+                state=TaskState.COMPLETED if success else TaskState.FAILED,
+                message="Task completed" if success else "Task failed",
+                node="end",
+                result=final_state if success else None,
+                error=final_state.get("error") if not success else None,
+            ),
+        )
 
-                    await self._emit_sse_event(
-                        event_queue,
-                        SSEEvent(
-                            task_id=task_id,
-                            state=state,
-                            message="Task completed successfully" if is_success else "Task failed",
-                            node=node_name,
-                            result=final_state if is_success else None,
-                            error=final_state.get("error") if not is_success else None,
-                        ),
-                    )
-
-        return final_state or {}
+        return final_state
 
     def _is_interrupt_event(self, event: dict[str, Any]) -> bool:
         """

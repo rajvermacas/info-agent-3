@@ -35,10 +35,26 @@ class MultiContactContract(BaseModel):
     """Contract compiled from the user's free-text request."""
 
     poc_plans: list[PocPlan] = Field(
-        description="Plans for each POC (one per email address)"
+        description="Plans for data-providing POCs (do not include delivery recipients)"
+    )
+    delivery_recipients: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Email addresses that should receive the final combined result (do not request data from them)"
+        ),
+    )
+    delivery_description: Optional[str] = Field(
+        default=None,
+        description=(
+            "What to deliver to delivery_recipients (format/content), e.g. 'send merged CSV with 5 unique animal names'"
+        ),
     )
     global_success_criteria: str = Field(
         description="Success criteria for the final merged/validated result"
+    )
+    agent_plan_steps: list[str] = Field(
+        default_factory=list,
+        description="Human-readable step-by-step plan for UI display",
     )
     assumptions: list[str] = Field(
         default_factory=list,
@@ -73,6 +89,9 @@ Convert the user's free-text request into a deterministic execution plan across 
 
 Rules:
 - Use ONLY the email addresses present in the user's request.
+- Identify whether an email address is a DATA SOURCE (we must ask them for data) or a DELIVERY RECIPIENT (they should receive the final combined result).
+- Never request data from delivery recipients. Delivery recipients are usually referenced with phrases like "send it to X", "once done send to X", or "forward the final result to X".
+- If the user provides an "Expected execution plan", follow it closely unless it contradicts the request.
 - If the request is ambiguous, make reasonable assumptions and list them explicitly.
 - Produce concrete, testable success criteria (counts, required columns, constraints).
 - Partition the request across contacts when it improves completeness/verification.
@@ -98,10 +117,13 @@ Email addresses found:
 {poc_emails}
 
 Task:
-1) Create one plan per POC email (poc_plans).
-2) Each plan must specify request_description, expected_format (excel/csv/text), and success_criteria.
-3) Provide global_success_criteria for the final merged outcome.
-4) If you infer assumptions (e.g., uniqueness), list them.
+1) Identify which emails are data sources vs delivery recipients.
+2) Create one plan per DATA SOURCE email (poc_plans).
+3) Each plan must specify request_description, expected_format (excel/csv/text), and success_criteria.
+4) Provide global_success_criteria for the final merged outcome.
+5) Provide delivery_recipients and delivery_description (what to send them).
+6) Provide agent_plan_steps as an ordered checklist the UI can display.
+7) If you infer assumptions (e.g., uniqueness, disjointness), list them.
 """
 
     @staticmethod
@@ -121,4 +143,3 @@ POC responses (each is extracted JSON/text from the POC's latest reply):
 
 Validate whether the combined responses satisfy the user request.
 If not valid, produce per_poc_missing_items mapping with targeted corrections."""
-

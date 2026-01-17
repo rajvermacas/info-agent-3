@@ -268,6 +268,8 @@ class AgentState(TypedDict, total=False):
     contract: Optional[dict[str, Any]]
     # - per-POC request context overrides inferred from the contract
     poc_request_contexts: Optional[dict[str, dict[str, str]]]
+    # - delivery recipients for final combined result
+    delivery_recipients: Optional[list[str]]
     # - global validation outputs / progress
     global_validation: Optional[dict[str, Any]]
     global_valid: Optional[bool]
@@ -324,6 +326,9 @@ class AgentState(TypedDict, total=False):
     _redirect_detected: Optional[bool]
     _redirect_email: Optional[str]
     _redirect_reason: Optional[str]
+
+    # Temporary: global validation -> final emails
+    _final_outputs_sent: Optional[bool]
 
 
 # ============================================================================

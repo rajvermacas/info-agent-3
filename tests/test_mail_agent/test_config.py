@@ -27,8 +27,9 @@ class TestSettings:
         assert settings.webhook_path == "/webhook/email-received"
         assert settings.gemini_model == "gemini-2.5-flash"
         assert settings.llm_temperature == 0.0
-        assert settings.max_attempts == 10
+        assert settings.max_attempts == 15
         assert settings.log_level == "INFO"
+        assert settings.log_llm_requests is False
 
     def test_environment_variable_override(self):
         """Test that environment variables override defaults."""
@@ -107,7 +108,7 @@ class TestSettings:
     def test_max_attempts_validation(self):
         """Test max_attempts validation."""
         # Valid range
-        for attempts in [1, 5, 10]:
+        for attempts in [1, 5, 10, 15]:
             settings = Settings(max_attempts=attempts)
             assert settings.max_attempts == attempts
 
@@ -117,7 +118,7 @@ class TestSettings:
 
         # Invalid - too high
         with pytest.raises(ValueError):
-            Settings(max_attempts=11)
+            Settings(max_attempts=16)
 
     def test_validation_content_max_chars_default(self):
         """Test validation_content_max_chars default value."""

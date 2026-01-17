@@ -56,6 +56,37 @@ class TestAttachmentParser:
         assert result.row_count == 10
         assert len(result.headers) > 0
         assert len(result.rows) == 10
+        assert result.raw_text is not None
+
+    def test_parse_csv_headerless_single_column(self):
+        """Test parsing a headerless single-column CSV."""
+        parser = AttachmentParser()
+        content = "cat\ndog\nmouse\n"
+        result = parser.parse_csv_text(filename="animals.csv", text_content=content)
+
+        assert result.headers == ["Column_0"]
+        assert result.row_count == 3
+        assert result.rows[0]["Column_0"] == "cat"
+
+    def test_parse_csv_single_column_header_detection(self):
+        """Test parsing single-column CSV with an obvious header."""
+        parser = AttachmentParser()
+        content = "animal\ncat\ndog\n"
+        result = parser.parse_csv_text(filename="animals.csv", text_content=content)
+
+        assert result.headers == ["animal"]
+        assert result.row_count == 2
+        assert result.rows[0]["animal"] == "cat"
+
+    def test_parse_csv_single_column_header_detection_does_not_split_letters(self):
+        """Test delimiter sniff doesn't incorrectly split on letters like 'i'."""
+        parser = AttachmentParser()
+        content = "animal_name\nlion\ntiger\n"
+        result = parser.parse_csv_text(filename="animals.csv", text_content=content)
+
+        assert result.headers == ["animal_name"]
+        assert result.row_count == 2
+        assert result.rows[0]["animal_name"] == "lion"
 
     def test_parse_excel_by_extension(self, sample_excel_base64: str):
         """Test parsing by file extension (not content-type)."""
@@ -186,6 +217,7 @@ class TestParsedContent:
             headers=["A", "B", "C"],
             rows=[{"A": 1, "B": 2, "C": 3}],
             row_count=1,
+            raw_text="raw",
         )
 
         import json
@@ -196,6 +228,7 @@ class TestParsedContent:
         assert json_data["headers"] == ["A", "B", "C"]
         assert json_data["row_count"] == 1
         assert len(json_data["data"]) == 1
+        assert json_data["raw_text"] == "raw"
 
     def test_to_text_structure(self):
         """Test text output structure."""

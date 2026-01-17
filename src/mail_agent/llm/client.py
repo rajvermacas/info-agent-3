@@ -207,7 +207,11 @@ class LLMClient:
         Raises:
             LLMConnectionError: If API call fails.
         """
-        logger.debug(f"Generating response for prompt: {prompt[:100]}...")
+        self._log_llm_request(
+            request_kind="text",
+            prompt=prompt,
+            system_prompt=system_prompt,
+        )
 
         messages = []
         if system_prompt:
@@ -252,8 +256,11 @@ class LLMClient:
             LLMConnectionError: If API call fails.
             LLMResponseParseError: If response cannot be parsed to schema.
         """
-        logger.debug(
-            f"Generating structured response for schema: {output_schema.__name__}"
+        self._log_llm_request(
+            request_kind="structured",
+            prompt=prompt,
+            system_prompt=system_prompt,
+            output_schema=output_schema,
         )
 
         messages = []
@@ -342,3 +349,31 @@ class LLMClient:
     def provider(self) -> LLMProvider:
         """Get the LLM provider."""
         return self._provider
+
+    def _truncate_for_log(self, text: str, max_chars: int = 4000) -> str:
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "...(truncated)"
+
+    def _log_llm_request(
+        self,
+        request_kind: str,
+        prompt: str,
+        system_prompt: Optional[str],
+        output_schema: Optional[Type[BaseModel]] = None,
+    ) -> None:
+        if not self._settings.log_llm_requests:
+            return
+        schema_name = output_schema.__name__ if output_schema else None
+        logger.info(
+            "LLM request: kind=%s provider=%s model=%s schema=%s prompt_len=%s system_len=%s",
+            request_kind,
+            self._provider.value,
+            self._model_name,
+            schema_name,
+            len(prompt),
+            len(system_prompt) if system_prompt else 0,
+        )
+        if system_prompt:
+            logger.info("LLM system prompt:\n%s", self._truncate_for_log(system_prompt))
+        logger.info("LLM user prompt:\n%s", self._truncate_for_log(prompt))

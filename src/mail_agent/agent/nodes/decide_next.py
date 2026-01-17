@@ -97,7 +97,16 @@ async def handle_success(state: AgentState) -> dict[str, Any]:
         conversation.status = "success"
         conversation.final_result = "success"
 
-        progress_msg = f"SUCCESS: Request satisfied by {current_poc}"
+        conversations = state.get("conversations") or {}
+        others_pending = any(
+            poc != current_poc and conv.get("status") != "success"
+            for poc, conv in conversations.items()
+        )
+        progress_msg = (
+            f"VALID response from {current_poc} (awaiting global validation)"
+            if others_pending
+            else f"SUCCESS: Request satisfied by {current_poc}"
+        )
 
         return {
             "conversations": update_conversation(state, current_poc, conversation),

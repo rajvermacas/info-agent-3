@@ -204,6 +204,40 @@ class TestComposeSuccessReplyNode:
                 assert validation_feedback in prompt
 
     @pytest.mark.asyncio
+    async def test_compose_success_reply_uses_per_poc_success_criteria(self):
+        """Test that per-POC context is used instead of global parsed_request fields."""
+        poc_email = "raj@gmail.com"
+        state = self._create_base_state(poc_email=poc_email)
+        state["parsed_request"]["success_criteria"] = "10 rows of recipes in CSV format"
+        state["poc_request_contexts"] = {
+            poc_email: {
+                "request_description": "Provide 10 animal names",
+                "success_criteria": "CSV with exactly 10 distinct animal names",
+                "expected_format": "csv",
+            }
+        }
+
+        mock_composed = SuccessAcknowledgmentEmail(
+            subject="Re: Request",
+            body="Thank you.\n\nBest regards,\ninfo-agent"
+        )
+
+        with patch("mail_agent.agent.nodes.compose_success_reply.LLMClient") as mock_llm_class:
+            mock_llm = MagicMock()
+            mock_llm.generate_structured = AsyncMock(return_value=mock_composed)
+            mock_llm_class.return_value = mock_llm
+
+            with patch("mail_agent.agent.nodes.compose_success_reply.get_settings") as mock_settings:
+                mock_settings.return_value.agent_email = "info-agent@gmail.com"
+
+                await compose_success_reply(state)
+
+                call_args = mock_llm.generate_structured.call_args
+                prompt = call_args.kwargs.get("prompt", call_args.args[0] if call_args.args else "")
+                assert "CSV with exactly 10 distinct animal names" in prompt
+                assert "10 rows of recipes" not in prompt
+
+    @pytest.mark.asyncio
     async def test_compose_success_reply_stores_result(self):
         """Test that composed email is stored in state for send_success_reply node."""
         state = self._create_base_state()

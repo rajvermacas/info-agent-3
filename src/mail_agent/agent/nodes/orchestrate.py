@@ -57,6 +57,13 @@ async def orchestrate(state: AgentState) -> dict[str, Any]:
             "progress_messages": [msg],
         }
 
+    if state.get("global_valid") is True and not state.get("_final_outputs_sent"):
+        return {
+            "orchestrator_next": "send_final_outputs",
+            "current_node": "orchestrate",
+            "progress_messages": ["Global validation passed; sending final confirmations and delivery email(s)."],
+        }
+
     if state.get("global_valid") is True:
         return {
             "orchestrator_next": "end",
@@ -105,4 +112,3 @@ async def orchestrate(state: AgentState) -> dict[str, Any]:
         "current_node": "orchestrate",
         "progress_messages": [msg],
     }
-

@@ -145,9 +145,9 @@ class Settings(BaseSettings):
 
     # Agent Behavior
     max_attempts: int = Field(
-        default=10,
+        default=15,
         ge=1,
-        le=10,
+        le=15,
         description="Maximum conversation attempts before giving up",
     )
 
@@ -157,6 +157,12 @@ class Settings(BaseSettings):
         ge=1000,
         le=50000,
         description="Maximum characters of extracted content to include in LLM validation prompt",
+    )
+
+    # Debugging
+    log_llm_requests: bool = Field(
+        default=False,
+        description="Log each request sent to the LLM (prompts/system prompts may contain sensitive data)",
     )
 
     # State Persistence
@@ -282,7 +288,7 @@ def get_settings() -> Settings:
         ValidationError: If settings validation fails.
     """
     logger.debug("Loading Mail Agent settings")
-    env_file = os.getenv("MAIL_AGENT_ENV_FILE")
+    env_file = os.getenv("MAIL_AGENT_ENV_FILE", ".env").strip() or None
     settings = Settings(_env_file=env_file) if env_file else Settings()
     logger.info(
         f"Settings loaded: api_url={settings.mock_smtp_api_url}, "

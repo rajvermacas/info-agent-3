@@ -33,6 +33,9 @@ from mail_agent.agent.nodes.decide_next import (
 from mail_agent.agent.nodes.handle_redirect import handle_redirect
 from mail_agent.agent.nodes.compose_success_reply import compose_success_reply
 from mail_agent.agent.nodes.send_success_reply import send_success_reply
+from mail_agent.agent.nodes.compose_receipt_reply import compose_receipt_reply
+from mail_agent.agent.nodes.send_receipt_reply import send_receipt_reply
+from mail_agent.agent.nodes.send_final_outputs import send_final_outputs
 
 
 logger = logging.getLogger(__name__)
@@ -47,9 +50,9 @@ def route_after_parse(state: AgentState) -> Literal["compile_contract", "end"]:
 
 def route_after_orchestrate(
     state: AgentState,
-) -> Literal["compose_email", "wait_for_any_reply", "validate_global", "end"]:
+) -> Literal["compose_email", "wait_for_any_reply", "validate_global", "send_final_outputs", "end"]:
     next_step = state.get("orchestrator_next")
-    if next_step in ("compose_email", "wait_for_any_reply", "validate_global"):
+    if next_step in ("compose_email", "wait_for_any_reply", "validate_global", "send_final_outputs"):
         return next_step  # type: ignore[return-value]
     return "end"
 
@@ -81,6 +84,14 @@ def route_after_validation(
     if result == "redirect":
         return "handle_redirect"
     return "prepare_followup"
+
+def route_after_handle_success(
+    state: AgentState,
+) -> Literal["compose_receipt_reply", "orchestrate"]:
+    conversations = state.get("conversations") or {}
+    if any(conv.get("status") != "success" for conv in conversations.values()):
+        return "compose_receipt_reply"
+    return "orchestrate"
 
 
 # ============================================================================
@@ -128,6 +139,7 @@ def create_mail_agent_graph() -> StateGraph:
     graph.add_node("extract_content", extract_content)
     graph.add_node("validate_response", validate_response)
     graph.add_node("validate_global", validate_global)
+    graph.add_node("send_final_outputs", send_final_outputs)
 
     # Phase 4: Handle result
     graph.add_node("handle_success", handle_success)
@@ -135,9 +147,11 @@ def create_mail_agent_graph() -> StateGraph:
     graph.add_node("prepare_followup", prepare_followup)
     graph.add_node("handle_redirect", handle_redirect)
 
-    # Phase 5: Success acknowledgment
+    # Phase 5: Acknowledgments
     graph.add_node("compose_success_reply", compose_success_reply)
     graph.add_node("send_success_reply", send_success_reply)
+    graph.add_node("compose_receipt_reply", compose_receipt_reply)
+    graph.add_node("send_receipt_reply", send_receipt_reply)
 
     # ========================================================================
     # Add Edges
@@ -165,6 +179,7 @@ def create_mail_agent_graph() -> StateGraph:
             "compose_email": "compose_email",
             "wait_for_any_reply": "wait_for_any_reply",
             "validate_global": "validate_global",
+            "send_final_outputs": "send_final_outputs",
             "end": END,
         },
     )
@@ -190,10 +205,17 @@ def create_mail_agent_graph() -> StateGraph:
         },
     )
 
-    # Success path -> Compose and send acknowledgment -> back to orchestrate
-    graph.add_edge("handle_success", "compose_success_reply")
-    graph.add_edge("compose_success_reply", "send_success_reply")
-    graph.add_edge("send_success_reply", "orchestrate")
+    # Success path -> Receipt acknowledgment (only when global validation still pending)
+    graph.add_conditional_edges(
+        "handle_success",
+        route_after_handle_success,
+        {
+            "compose_receipt_reply": "compose_receipt_reply",
+            "orchestrate": "orchestrate",
+        },
+    )
+    graph.add_edge("compose_receipt_reply", "send_receipt_reply")
+    graph.add_edge("send_receipt_reply", "orchestrate")
 
     graph.add_edge("handle_failure", "orchestrate")
     graph.add_edge("prepare_followup", "orchestrate")
@@ -201,6 +223,7 @@ def create_mail_agent_graph() -> StateGraph:
 
     # Global validate always returns to orchestrate (which will end on success or chase on fail)
     graph.add_edge("validate_global", "orchestrate")
+    graph.add_edge("send_final_outputs", "orchestrate")
 
     logger.info("Mail agent graph created successfully")
     return graph

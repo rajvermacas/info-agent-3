@@ -6,6 +6,7 @@ success criteria used for cross-POC validation.
 """
 
 import logging
+import re
 from typing import Any
 
 from mail_agent.agent.state import AgentState, get_parsed_request
@@ -18,6 +19,17 @@ from mail_agent.llm.multi_contact import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _infer_delivery_recipients(user_instruction: str, emails: list[str]) -> list[str]:
+    text = user_instruction.lower()
+    inferred: list[str] = []
+    for email in emails:
+        e = email.lower()
+        pattern = rf"(send|share|forward).{{0,120}}{re.escape(e)}"
+        if re.search(pattern, text):
+            inferred.append(email)
+    return inferred
 
 
 async def compile_contract(state: AgentState) -> dict[str, Any]:
@@ -47,6 +59,13 @@ async def compile_contract(state: AgentState) -> dict[str, Any]:
         system_prompt=MultiContactPrompts.COMPILE_SYSTEM,
     )
 
+    if not contract.delivery_recipients:
+        contract.delivery_recipients = _infer_delivery_recipients(user_instruction, parsed.poc_emails)
+
+    delivery_set = set(contract.delivery_recipients or [])
+    if delivery_set:
+        contract.poc_plans = [p for p in contract.poc_plans if p.poc_email not in delivery_set]
+
     poc_contexts: dict[str, dict[str, str]] = {}
     for plan in contract.poc_plans:
         poc_contexts[plan.poc_email] = {
@@ -54,6 +73,19 @@ async def compile_contract(state: AgentState) -> dict[str, Any]:
             "success_criteria": plan.success_criteria,
             "expected_format": plan.expected_format,
         }
+
+    # Prune conversations to DATA SOURCE POCs only (delivery recipients should not be emailed for data).
+    data_pocs = [p.poc_email for p in contract.poc_plans]
+    existing_conversations = state.get("conversations") or {}
+    conversations: dict[str, dict[str, Any]] = {}
+    for poc_email in data_pocs:
+        if poc_email in existing_conversations:
+            conversations[poc_email] = existing_conversations[poc_email]
+        else:
+            conversations[poc_email] = {"poc_email": poc_email, "status": "pending", "attempt_count": 0}
+
+    plan_lines = contract.agent_plan_steps or []
+    plan_preview = "\n".join(f"- {line}" for line in plan_lines[:10]) if plan_lines else "- (none)"
 
     progress = (
         f"Contract compiled for {len(contract.poc_plans)} POC(s). "
@@ -63,7 +95,9 @@ async def compile_contract(state: AgentState) -> dict[str, Any]:
     return {
         "contract": contract.model_dump(),
         "poc_request_contexts": poc_contexts,
+        "delivery_recipients": contract.delivery_recipients,
+        "conversations": conversations,
+        "current_poc": data_pocs[0] if data_pocs else None,
         "current_node": "compile_contract",
-        "progress_messages": [progress],
+        "progress_messages": [progress, f"Execution plan:\n{plan_preview}"],
     }
-

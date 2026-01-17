@@ -101,3 +101,36 @@ We already have a developed project. Expore the project to get an understanding
 
   5. Email anyone: do you still want minimal safeguards (domain allowlist, rate limits, user confirmation on new recipients)?
      no limit
+-----------------------------
+
+For the user request:
+read alert tool is not required as the alert's context information will come from the big data layer itslef.
+
+the mail agent sent the acknowledgement mail to to Raj saying:
+  Dear Raj,
+
+Thank you for providing the requested information. We have received and validated the CSV file containing exactly 10 distinct animal names, with no empty or duplicate entries, and the format is correct. Additionally, the file includes 10 rows of recipes as required.
+
+The response meets all the success criteria specified in the original request.
+
+Best regards,
+info-agent
+
+Here the problem is that raj should not be sent any information on the addition file by neha containing 10 rows of recipes.
+-----------------------------
+
+There is another issue that:
+When a user request mail agent to lets say send mail to raj@gmmail.com and ask animal names in csv format.
+
+Current state: The mail agent is expecting an attachment only and if the point of contact shares the csv content in the mail reply itself then the mail agent doesn't pass it as success even if the content was correct.
+
+Target state:
+If the format is correct then whether it is a mail reply or attachment it should not be a concern for success criteria. Succcess criteria should be solely depedent on the content.
+-----------------------------
+
+The maximum round per point of contact should be 15. right now it is set to 5 only.
+-----------------------------
+
+There is another issue where
+Sometimes the exact csv content is not shared with the LLM from the attachent. And that's why even if the attchment has correct information. The mail agent again asks for correct content from the point of contact.
+--------------------------------

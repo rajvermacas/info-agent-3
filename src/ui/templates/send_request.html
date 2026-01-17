@@ -39,6 +39,24 @@
                     </p>
                 </div>
 
+                <div>
+                    <label for="expected_plan" class="block text-sm font-medium text-gray-700">
+                        Expected Agent Plan (optional)
+                    </label>
+                    <div class="mt-1">
+                        <textarea
+                            id="expected_plan"
+                            name="expected_plan"
+                            rows="6"
+                            placeholder="Optional: paste the step-by-step plan you want the agent to follow."
+                            class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-3 border"
+                        ></textarea>
+                    </div>
+                    <p class="mt-2 text-sm text-gray-500">
+                        If provided, the agent will treat this as guidance and will display it in the UI.
+                    </p>
+                </div>
+
                 <div class="flex items-center space-x-4">
                     <button
                         type="submit"

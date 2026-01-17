@@ -21,6 +21,7 @@ router = APIRouter(prefix="/send", tags=["Send Request"])
 async def submit_request(
     request: Request,
     instruction: str = Form(...),
+    expected_plan: str | None = Form(default=None),
 ) -> HTMLResponse:
     """
     Submit a mail request to the A2A server.
@@ -36,8 +37,16 @@ async def submit_request(
     resources = get_resources()
 
     try:
+        final_instruction = instruction.strip()
+        if expected_plan and expected_plan.strip():
+            final_instruction = (
+                f"{final_instruction}\n\n"
+                "Expected execution plan (user-provided):\n"
+                f"{expected_plan.strip()}\n"
+            )
+
         # Send task to A2A server
-        task_info = await resources.a2a_client.send_task(instruction)
+        task_info = await resources.a2a_client.send_task(final_instruction)
 
         logger.info("Task submitted: %s (state: %s)", task_info.task_id, task_info.state)
 
@@ -50,6 +59,7 @@ async def submit_request(
                 "state": task_info.state,
                 "message": task_info.message or "Task submitted successfully",
                 "success": True,
+                "expected_plan": expected_plan.strip() if expected_plan else None,
             },
         )
     except A2AClientError as e:
