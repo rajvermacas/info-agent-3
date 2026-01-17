@@ -85,6 +85,23 @@ class TaskNotFoundResponse(BaseModel):
     error: str = Field(description="Error message")
     task_id: str = Field(description="The task ID that was not found")
 
+class TaskPlanResponse(BaseModel):
+    """Response model for a task's proposed plan (when awaiting approval)."""
+
+    task_id: str = Field(description="Unique task identifier")
+    plan_status: str = Field(description="Plan status: pending_approval, approved, rejected")
+    plan: dict[str, Any] = Field(description="Plan payload (agent_plan_steps, poc_plans, etc.)")
+
+
+class PlanDecisionRequest(BaseModel):
+    """Request model for approving or rejecting an agent plan."""
+
+    decision: str = Field(description="approve or reject")
+    feedback: str | None = Field(
+        default=None,
+        description="Required when decision=reject; user feedback for regenerating the plan",
+    )
+
 
 # ============================================================================
 # Router Factory
@@ -102,6 +119,73 @@ def create_tasks_router(task_manager: TaskManager) -> APIRouter:
         Configured APIRouter with task endpoints.
     """
     router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+    @router.get(
+        "/{task_id}/plan",
+        response_model=TaskPlanResponse,
+        summary="Get proposed plan for a task",
+        description="Return the agent-proposed plan when the task is suspended awaiting user approval.",
+    )
+    async def get_task_plan(task_id: str) -> TaskPlanResponse:
+        task_info = await task_manager.get_suspended_task_info(task_id)
+        if task_info is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Task not found or not suspended", "task_id": task_id},
+            )
+
+        interrupt_data = task_info.get("interrupt_data") or {}
+        if interrupt_data.get("reason") != "awaiting_plan_approval":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Task is not awaiting plan approval", "task_id": task_id},
+            )
+
+        plan = interrupt_data.get("plan") or {}
+        plan_status = "pending_approval"
+        return TaskPlanResponse(task_id=task_id, plan_status=plan_status, plan=plan)
+
+    @router.post(
+        "/{task_id}/plan/decision",
+        summary="Approve or reject the proposed plan",
+        description="Resume the suspended task using the user's plan decision.",
+    )
+    async def submit_plan_decision(task_id: str, request: PlanDecisionRequest) -> dict[str, Any]:
+        decision = request.decision.strip().lower()
+        if decision not in ("approve", "reject"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "decision must be 'approve' or 'reject'", "task_id": task_id},
+            )
+        if decision == "reject" and not (request.feedback or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "feedback is required when rejecting a plan", "task_id": task_id},
+            )
+
+        task_info = await task_manager.get_suspended_task_info(task_id)
+        if task_info is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Task not found or not suspended", "task_id": task_id},
+            )
+
+        interrupt_data = task_info.get("interrupt_data") or {}
+        if interrupt_data.get("reason") != "awaiting_plan_approval":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "Task is not awaiting plan approval", "task_id": task_id},
+            )
+
+        resume_data = {"decision": decision, "feedback": request.feedback}
+        resumed = await task_manager.resume_suspended_task(task_id, resume_data)
+        if not resumed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": "Task not found or not suspended", "task_id": task_id},
+            )
+
+        return {"task_id": task_id, "state": "resumed", "message": "Plan decision received; resuming task."}
 
     @router.get(
         "/{task_id}",

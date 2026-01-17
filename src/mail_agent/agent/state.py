@@ -259,6 +259,12 @@ class AgentState(TypedDict, total=False):
 
     # Original request
     user_instruction: str
+    base_user_instruction: str
+
+    # Plan approval
+    plan_status: Optional[str]  # pending_approval, approved, rejected
+    plan_feedback: Optional[str]
+    reminder_policy: Optional[dict[str, Any]]
 
     # Parsed request (set by parse_instruction node)
     parsed_request: Optional[dict[str, Any]]
@@ -330,6 +336,10 @@ class AgentState(TypedDict, total=False):
     # Temporary: global validation -> final emails
     _final_outputs_sent: Optional[bool]
 
+    # Temporary: classify_reply -> compose_clarification_reply
+    _clarification_detected: Optional[bool]
+    _clarification_question: Optional[str]
+
 
 # ============================================================================
 # State Helper Functions
@@ -348,12 +358,16 @@ def create_initial_state(user_instruction: str) -> AgentState:
     """
     return AgentState(
         user_instruction=user_instruction,
+        base_user_instruction=user_instruction,
         parsed_request=None,
         contract=None,
         poc_request_contexts=None,
         global_validation=None,
         global_valid=None,
         conversations={},
+        plan_status="pending_approval",
+        plan_feedback=None,
+        reminder_policy=None,
         current_node="start",
         current_poc=None,
         pending_webhooks=[],

@@ -309,6 +309,39 @@ class A2AClientService:
             logger.error("Unexpected error getting task status: %s", e)
             raise A2ATaskError(f"Unexpected error: {e}") from e
 
+    async def get_task_plan(self, task_id: str) -> dict[str, Any]:
+        """
+        Get the proposed plan for a suspended task (plan approval stage).
+        """
+        client = await self._get_client()
+        try:
+            response = await client.get(f"/api/tasks/{task_id}/plan")
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise A2ATaskError(f"Plan not available for task: {task_id}") from e
+            raise A2ATaskError(f"HTTP error: {e.response.status_code}") from e
+        except Exception as e:
+            raise A2ATaskError(f"Unexpected error: {e}") from e
+
+    async def submit_plan_decision(
+        self, task_id: str, decision: str, feedback: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Submit approve/reject decision for a proposed plan.
+        """
+        payload = {"decision": decision, "feedback": feedback}
+        client = await self._get_client()
+        try:
+            response = await client.post(f"/api/tasks/{task_id}/plan/decision", json=payload)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            raise A2ATaskError(f"HTTP error: {e.response.status_code}") from e
+        except Exception as e:
+            raise A2ATaskError(f"Unexpected error: {e}") from e
+
     async def list_tasks(self) -> list[TaskInfo]:
         """
         List all tasks.

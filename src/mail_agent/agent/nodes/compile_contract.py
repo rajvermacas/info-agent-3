@@ -32,6 +32,41 @@ def _infer_delivery_recipients(user_instruction: str, emails: list[str]) -> list
     return inferred
 
 
+def _clamp_interval_seconds(value: int, settings) -> int:
+    min_s = int(getattr(settings, "reminder_min_interval_seconds", 60))
+    max_s = int(getattr(settings, "reminder_max_interval_seconds", 86400))
+    return max(min_s, min(max_s, int(value)))
+
+
+def _compile_effective_reminder_policy(contract: MultiContactContract, settings) -> dict[str, Any]:
+    policy = contract.reminder_policy
+
+    enabled = bool(getattr(settings, "reminder_default_enabled", True))
+    if policy and policy.enabled is not None:
+        enabled = bool(policy.enabled)
+
+    interval = int(getattr(settings, "reminder_default_interval_seconds", 7200))
+    if policy and policy.interval_seconds is not None:
+        interval = int(policy.interval_seconds)
+    interval = _clamp_interval_seconds(interval, settings)
+
+    max_per_poc = int(getattr(settings, "reminder_max_per_poc", 3))
+    if policy and policy.max_reminders_per_poc is not None:
+        max_per_poc = int(policy.max_reminders_per_poc)
+
+    first_delay = None
+    if policy and policy.first_reminder_delay_seconds is not None:
+        first_delay = _clamp_interval_seconds(int(policy.first_reminder_delay_seconds), settings)
+
+    return {
+        "enabled": enabled,
+        "interval_seconds": interval,
+        "max_reminders_per_poc": max_per_poc,
+        "first_reminder_delay_seconds": first_delay,
+        "source": "llm" if policy else "default",
+    }
+
+
 async def compile_contract(state: AgentState) -> dict[str, Any]:
     user_instruction = state.get("user_instruction", "")
     if not user_instruction:
@@ -87,6 +122,8 @@ async def compile_contract(state: AgentState) -> dict[str, Any]:
     plan_lines = contract.agent_plan_steps or []
     plan_preview = "\n".join(f"- {line}" for line in plan_lines[:10]) if plan_lines else "- (none)"
 
+    reminder_policy = _compile_effective_reminder_policy(contract, settings)
+
     progress = (
         f"Contract compiled for {len(contract.poc_plans)} POC(s). "
         f"Assumptions: {len(contract.assumptions)}"
@@ -98,6 +135,16 @@ async def compile_contract(state: AgentState) -> dict[str, Any]:
         "delivery_recipients": contract.delivery_recipients,
         "conversations": conversations,
         "current_poc": data_pocs[0] if data_pocs else None,
+        "reminder_policy": reminder_policy,
         "current_node": "compile_contract",
-        "progress_messages": [progress, f"Execution plan:\n{plan_preview}"],
+        "progress_messages": [
+            progress,
+            f"Execution plan:\n{plan_preview}",
+            (
+                "Reminders: enabled"
+                if reminder_policy["enabled"]
+                else "Reminders: disabled"
+            )
+            + f", interval={reminder_policy['interval_seconds']}s, max_per_poc={reminder_policy['max_reminders_per_poc']}",
+        ],
     }

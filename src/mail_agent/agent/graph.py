@@ -16,12 +16,14 @@ from langgraph.graph import END, START, StateGraph
 from mail_agent.agent.state import AgentState
 from mail_agent.agent.nodes.parse_instruction import parse_instruction
 from mail_agent.agent.nodes.compile_contract import compile_contract
+from mail_agent.agent.nodes.wait_for_plan_approval import wait_for_plan_approval
 from mail_agent.agent.nodes.orchestrate import orchestrate
 from mail_agent.agent.nodes.compose_email import compose_email
 from mail_agent.agent.nodes.send_email import send_email
 from mail_agent.agent.nodes.wait_for_any_reply import wait_for_any_reply
 from mail_agent.agent.nodes.fetch_email import fetch_email
 from mail_agent.agent.nodes.extract_content import extract_content
+from mail_agent.agent.nodes.classify_reply import classify_reply
 from mail_agent.agent.nodes.validate_response import validate_response
 from mail_agent.agent.nodes.validate_global import validate_global
 from mail_agent.agent.nodes.decide_next import (
@@ -36,6 +38,8 @@ from mail_agent.agent.nodes.send_success_reply import send_success_reply
 from mail_agent.agent.nodes.compose_receipt_reply import compose_receipt_reply
 from mail_agent.agent.nodes.send_receipt_reply import send_receipt_reply
 from mail_agent.agent.nodes.send_final_outputs import send_final_outputs
+from mail_agent.agent.nodes.compose_clarification_reply import compose_clarification_reply
+from mail_agent.agent.nodes.send_clarification_email import send_clarification_email
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +58,16 @@ def route_after_orchestrate(
     next_step = state.get("orchestrator_next")
     if next_step in ("compose_email", "wait_for_any_reply", "validate_global", "send_final_outputs"):
         return next_step  # type: ignore[return-value]
+    return "end"
+
+def route_after_plan_approval(
+    state: AgentState,
+) -> Literal["orchestrate", "parse_instruction", "end"]:
+    status = (state.get("plan_status") or "").lower()
+    if status == "rejected":
+        return "parse_instruction"
+    if status == "approved":
+        return "orchestrate"
     return "end"
 
 
@@ -84,6 +98,13 @@ def route_after_validation(
     if result == "redirect":
         return "handle_redirect"
     return "prepare_followup"
+
+def route_after_reply_classification(
+    state: AgentState,
+) -> Literal["compose_clarification_reply", "validate_response"]:
+    if state.get("_clarification_detected"):
+        return "compose_clarification_reply"
+    return "validate_response"
 
 def route_after_handle_success(
     state: AgentState,
@@ -127,6 +148,7 @@ def create_mail_agent_graph() -> StateGraph:
     # Phase 1: Parse user instruction
     graph.add_node("parse_instruction", parse_instruction)
     graph.add_node("compile_contract", compile_contract)
+    graph.add_node("wait_for_plan_approval", wait_for_plan_approval)
     graph.add_node("orchestrate", orchestrate)
 
     # Phase 2: Compose and send email
@@ -137,6 +159,7 @@ def create_mail_agent_graph() -> StateGraph:
     graph.add_node("wait_for_any_reply", wait_for_any_reply)
     graph.add_node("fetch_email", fetch_email)
     graph.add_node("extract_content", extract_content)
+    graph.add_node("classify_reply", classify_reply)
     graph.add_node("validate_response", validate_response)
     graph.add_node("validate_global", validate_global)
     graph.add_node("send_final_outputs", send_final_outputs)
@@ -152,6 +175,8 @@ def create_mail_agent_graph() -> StateGraph:
     graph.add_node("send_success_reply", send_success_reply)
     graph.add_node("compose_receipt_reply", compose_receipt_reply)
     graph.add_node("send_receipt_reply", send_receipt_reply)
+    graph.add_node("compose_clarification_reply", compose_clarification_reply)
+    graph.add_node("send_clarification_email", send_clarification_email)
 
     # ========================================================================
     # Add Edges
@@ -170,7 +195,17 @@ def create_mail_agent_graph() -> StateGraph:
         },
     )
 
-    graph.add_edge("compile_contract", "orchestrate")
+    graph.add_edge("compile_contract", "wait_for_plan_approval")
+
+    graph.add_conditional_edges(
+        "wait_for_plan_approval",
+        route_after_plan_approval,
+        {
+            "orchestrate": "orchestrate",
+            "parse_instruction": "parse_instruction",
+            "end": END,
+        },
+    )
 
     graph.add_conditional_edges(
         "orchestrate",
@@ -191,7 +226,19 @@ def create_mail_agent_graph() -> StateGraph:
     # Wait -> Fetch -> Extract -> Validate
     graph.add_edge("wait_for_any_reply", "fetch_email")
     graph.add_edge("fetch_email", "extract_content")
-    graph.add_edge("extract_content", "validate_response")
+    graph.add_edge("extract_content", "classify_reply")
+
+    graph.add_conditional_edges(
+        "classify_reply",
+        route_after_reply_classification,
+        {
+            "compose_clarification_reply": "compose_clarification_reply",
+            "validate_response": "validate_response",
+        },
+    )
+
+    graph.add_edge("compose_clarification_reply", "send_clarification_email")
+    graph.add_edge("send_clarification_email", "orchestrate")
 
     # Validate -> Decision (conditional, per POC)
     graph.add_conditional_edges(

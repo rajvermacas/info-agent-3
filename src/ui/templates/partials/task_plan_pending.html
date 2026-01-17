@@ -1,0 +1,14 @@
+<div class="bg-white shadow rounded-lg p-4"
+     hx-get="/api/send/plan/{{ task_id }}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML">
+    <h3 class="text-sm font-medium text-gray-900">Proposed Plan</h3>
+    <p class="mt-2 text-sm text-gray-600">
+        {% if task and task.message %}
+            {{ task.message }}
+        {% else %}
+            Generating the agent plan…
+        {% endif %}
+    </p>
+</div>
+

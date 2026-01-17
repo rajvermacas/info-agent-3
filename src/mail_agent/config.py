@@ -185,6 +185,42 @@ class Settings(BaseSettings):
         description="Interval (seconds) for cleaning up expired suspended tasks",
     )
 
+    # Reminders (Non-blocking A2A mode)
+    reminder_default_enabled: bool = Field(
+        default=True,
+        description="Whether reminders are enabled by default when the user request does not specify timing instructions",
+    )
+    reminder_default_interval_seconds: int = Field(
+        default=7200,  # 2 hours
+        ge=60,
+        le=86400,
+        description="Default reminder interval (seconds) when user request does not specify timing instructions",
+    )
+    reminder_scheduler_tick_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="How often (seconds) the TaskManager checks for due reminders",
+    )
+    reminder_max_per_poc: int = Field(
+        default=3,
+        ge=0,
+        le=50,
+        description="Maximum reminders to send per POC before escalating to the end user",
+    )
+    reminder_min_interval_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=86400,
+        description="Minimum allowed reminder interval (seconds) for LLM-parsed user timing instructions",
+    )
+    reminder_max_interval_seconds: int = Field(
+        default=86400,
+        ge=60,
+        le=604800,
+        description="Maximum allowed reminder interval (seconds) for LLM-parsed user timing instructions",
+    )
+
     # HTTP Client Settings
     http_timeout_seconds: float = Field(
         default=30.0,

@@ -281,6 +281,38 @@ class TaskStore:
             logger.error(f"Failed to remove suspended task {task_id}: {e}")
             raise TaskStoreError(f"Failed to remove suspended task: {e}") from e
 
+    async def update_interrupt_data(
+        self, task_id: str, interrupt_data: dict[str, Any]
+    ) -> None:
+        """
+        Update interrupt_data for an existing suspended task.
+
+        Used to persist reminder counters/timestamps while a task remains suspended.
+
+        Args:
+            task_id: Task identifier.
+            interrupt_data: Updated interrupt payload.
+
+        Raises:
+            TaskNotFoundError: If task_id is not suspended.
+            TaskStoreError: If database operation fails.
+        """
+        interrupt_json = json.dumps(interrupt_data) if interrupt_data else None
+
+        try:
+            cursor = await self._db.execute(
+                "UPDATE suspended_tasks SET interrupt_data = ? WHERE task_id = ?",
+                (interrupt_json, task_id),
+            )
+            await self._db.commit()
+            if cursor.rowcount <= 0:
+                raise TaskNotFoundError(f"Suspended task not found: {task_id}")
+        except TaskNotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to update interrupt_data for task {task_id}: {e}")
+            raise TaskStoreError(f"Failed to update interrupt_data: {e}") from e
+
     async def get_expired_tasks(self) -> list[dict[str, Any]]:
         """
         Get all expired suspended tasks.

@@ -134,3 +134,61 @@ The maximum round per point of contact should be 15. right now it is set to 5 on
 There is another issue where
 Sometimes the exact csv content is not shared with the LLM from the attachent. And that's why even if the attchment has correct information. The mail agent again asks for correct content from the point of contact.
 --------------------------------
+
+You are a Senior Architect with more than 15 years of experience in Software Development.
+As a Senior Architect, discuss with me. DO NOT START CODING. I just need a brainstorming session with you.
+
+- You shoud ask me releveant pin pointed questions with default answer attached to it.
+- You should also give me some questions to consider in current requirements for improving the quality/experience
+
+**IMPORTANT AND MUST BE FOLLOWED AT ANY COST**  
+- Think hard about the requirement.  
+- Do not write code. Write algorithms.
+- We should leverage existing battle-tested frameworks rather than reinventing the wheel.
+- Keep the architecture lean and concise.
+- Create ascii diagram for visual representation of the execution flow.
+- Include clearly all the integration points with their corresponding API contracts.
+- Include technology stack, frameworks and sdks in the architecture.
+
+This is a brown field project with multiple features already implemented.
+But there are a few requrirements/gaps in the current solution.
+
+1. The point of contact should be able to reply back asking for clarifications around the requirement.
+2. Basically what I want the solution to be is following:
+   a. An info agent which has following responsibilities:
+      a.1. Reads the prompt given by the end user.
+      a.2. Based on the prompt LLM should be able to create plan.
+         a.2.1. Right now on UI /send page there is an input box for Expected Agent Plan (optional)
+         a.2.2. But this should not be an input box rather this should be provided by the Agent and once the end user confirms the plan by accepting it via a confirm/reject button, the agent should continue acting on it.
+         a.2.3. For example:
+            For the below request:
+               send mail to raj@gmail asking a csv file with 2 animal names and neha@gmail.com for 3 animal names. The aggregated result should have
+               unique animal names and the names from raj and neha should not have common animal names. And once you have all the 5 animal names.
+               Send it to sunny@gmail.com
+               
+            The Plan by the Agent should look like below:
+               Raj sends the animal names, if correct then reply back saying thanks for sharing. I still need to validate it. Once done I will share
+               if its correct or not.
+               then neha answers with 3 remaining animal names. It should then check all the 5 animal names with correct validation criteria of
+               having 5 distinct animal names. and if it is correct then send raj a mail that we have validated and data looks correct. Then it
+               should send a reply to neha mentioninng data is correct.
+               Then send this correct 5 animal names to sunny@gmail.com
+
+               Where as if raj or neha sent incorrect data then the info agent should again send the mail to ask for the data.
+      a.3. Upon approval of the plan the info mail agent should act accordingly.
+      a.4. It should be able to read the prompt, create plan, execute plan, reply back on mail if there are further questions from the point of contact, when data is received from all the point of contacts then validate the final data, acknowledge that the correct data has been sent - This is the responsibilities an info mail agent should hold.
+
+Find out all the gaps in the current architecture and solution and come up with a design on how to solve it.
+----------------------------------------------
+
+What’s the source of truth for validation: deterministic rules first or LLM-first? - LLM-first
+
+Do you want “Plan diff” when regenerating after rejection (so users see what changed)? - No diff required. If the user rejects then there should be a input box where the user can sends the feedback and reject and the agent should reiterate on the requirement and share a new upgraded plan as per the feedback and the original request.
+
+What is the timeout/SLA for waiting on POCs, and what should happen on timeout - auto reminder each 2 hours which should be configurable by the user input request only. If the user request includes anything related to somthing like "wait for 2 minutes and keep sending mail again in this interval to ask for the data" or anything like it which the LLM should be able to understand.
+
+How do you prevent prompt-injection via email replies/attachments  - THis is a poc hence I am not worried about prompt injection for now
+
+Should users be able to manually override validation and “accept anyway” for edge cases? - No
+
+Do you need idempotency/deduplication for duplicate webhooks - Since it is a poc. I am not worried about it right now.

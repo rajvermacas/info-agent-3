@@ -242,12 +242,16 @@ class MailAgentA2AExecutor(AgentExecutor):
                         interrupt_data=interrupt_data,
                     )
 
-                    poc_emails = interrupt_data.get("poc_emails")
-                    wait_msg = (
-                        f"Waiting for replies from {len(poc_emails)} contact(s)."
-                        if isinstance(poc_emails, list) and len(poc_emails) > 1
-                        else f"Waiting for reply from {poc_email}."
-                    )
+                    reason = interrupt_data.get("reason")
+                    if reason == "awaiting_plan_approval":
+                        wait_msg = "Awaiting plan approval in UI."
+                    else:
+                        poc_emails = interrupt_data.get("poc_emails")
+                        wait_msg = (
+                            f"Waiting for replies from {len(poc_emails)} contact(s)."
+                            if isinstance(poc_emails, list) and len(poc_emails) > 1
+                            else f"Waiting for reply from {poc_email}."
+                        )
 
                     # Emit suspended event
                     await self._emit_sse_event(

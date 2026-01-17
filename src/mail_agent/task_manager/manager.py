@@ -28,6 +28,7 @@ from mail_agent.task_manager.models import (
     TaskResult,
     WebhookPayload,
 )
+from mail_agent.task_manager.reminders import send_due_reminders
 
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,18 @@ class TaskManager:
         self._shutdown_event.clear()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         logger.info("TaskManager started with background cleanup")
+
+    async def get_suspended_task_info(self, task_id: str) -> Optional[dict[str, Any]]:
+        """
+        Get suspended task info including interrupt_data (if suspended).
+
+        Args:
+            task_id: Task identifier.
+
+        Returns:
+            Suspended task record dict or None.
+        """
+        return await self._task_store.get_suspended_task(task_id)
 
     async def stop(self) -> None:
         """
@@ -341,16 +354,51 @@ class TaskManager:
         # Resume task in background
         logger.info(f"Resuming task {task_id} with webhook data")
         asyncio.create_task(
-            self._resume_task(task_id, task_info["thread_id"], payload)
+            self._resume_task(task_id, task_info["thread_id"], payload.to_resume_data())
         )
 
+        return True
+
+    async def resume_suspended_task(self, task_id: str, resume_data: dict[str, Any]) -> bool:
+        """
+        Resume a suspended task by task_id (used for UI actions like plan approval).
+
+        Args:
+            task_id: Task identifier.
+            resume_data: Data passed to Command(resume=...).
+
+        Returns:
+            True if a suspended task was found and resumed, False otherwise.
+        """
+        task_info = await self._task_store.get_suspended_task(task_id)
+        if task_info is None:
+            return False
+
+        expires_at = datetime.fromisoformat(task_info["expires_at"])
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
+            await self._handle_expired_task(task_id, task_info["poc_email"])
+            return False
+
+        interrupt_data = task_info.get("interrupt_data") or {}
+        mapped_pocs = interrupt_data.get("poc_emails")
+        async with self._lock:
+            if isinstance(mapped_pocs, list) and mapped_pocs:
+                for email in mapped_pocs:
+                    self._poc_to_task.pop(str(email).lower(), None)
+            else:
+                self._poc_to_task.pop(str(task_info["poc_email"]).lower(), None)
+
+        await self._task_store.remove_suspended_task(task_id)
+        asyncio.create_task(self._resume_task(task_id, task_info["thread_id"], resume_data))
         return True
 
     async def _resume_task(
         self,
         task_id: str,
         thread_id: str,
-        payload: WebhookPayload,
+        resume_data: dict[str, Any],
     ) -> None:
         """
         Resume a suspended task from checkpoint.
@@ -366,7 +414,6 @@ class TaskManager:
         logger.info(f"Resuming task {task_id} from checkpoint")
 
         config = {"configurable": {"thread_id": thread_id}}
-        resume_data = payload.to_resume_data()
 
         try:
             # Create resume command
@@ -649,21 +696,32 @@ class TaskManager:
     # =========================================================================
 
     async def _cleanup_loop(self) -> None:
-        """Background loop for cleaning up expired tasks."""
-        interval = self._settings.expired_task_cleanup_interval_seconds
-        logger.info(f"Starting cleanup loop with interval {interval}s")
+        """Background loop for reminders and expired task cleanup."""
+        cleanup_interval = int(getattr(self._settings, "expired_task_cleanup_interval_seconds", 300))
+        reminder_tick = int(getattr(self._settings, "reminder_scheduler_tick_seconds", cleanup_interval))
+        tick = min(cleanup_interval, reminder_tick)
+        logger.info(f"Starting background loop: tick={tick}s, cleanup_interval={cleanup_interval}s")
+        last_cleanup = datetime.now(timezone.utc)
 
         while not self._shutdown_event.is_set():
             try:
                 await asyncio.wait_for(
                     self._shutdown_event.wait(),
-                    timeout=interval,
+                    timeout=tick,
                 )
                 # Shutdown requested
                 break
             except asyncio.TimeoutError:
-                # Normal timeout, run cleanup
-                await self._cleanup_expired_tasks()
+                # Normal timeout, run maintenance
+                try:
+                    await send_due_reminders(self._task_store, self._settings)
+                except Exception as e:
+                    logger.error("Error during reminder tick: %s", e)
+
+                now = datetime.now(timezone.utc)
+                if (now - last_cleanup).total_seconds() >= float(cleanup_interval):
+                    await self._cleanup_expired_tasks()
+                    last_cleanup = now
 
         logger.info("Cleanup loop stopped")
 

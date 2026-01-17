@@ -12,6 +12,27 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class ReminderPolicy(BaseModel):
+    """Reminder policy parsed from user request (optional) and/or defaults."""
+
+    enabled: Optional[bool] = Field(
+        default=None,
+        description="Whether reminders should be sent while waiting for replies",
+    )
+    interval_seconds: Optional[int] = Field(
+        default=None,
+        description="Reminder interval in seconds (e.g., 7200 for 2 hours)",
+    )
+    max_reminders_per_poc: Optional[int] = Field(
+        default=None,
+        description="Maximum reminders per POC before escalation",
+    )
+    first_reminder_delay_seconds: Optional[int] = Field(
+        default=None,
+        description="Optional delay before the first reminder is sent (seconds)",
+    )
+
+
 class PocPlan(BaseModel):
     """Per-POC plan inferred from the user prompt."""
 
@@ -60,6 +81,13 @@ class MultiContactContract(BaseModel):
         default_factory=list,
         description="Inferred assumptions made from ambiguous user wording",
     )
+    reminder_policy: Optional[ReminderPolicy] = Field(
+        default=None,
+        description=(
+            "Optional reminder policy extracted from the user request, e.g. "
+            "'remind every 2 hours' or 'wait 2 minutes then remind every 2 minutes'"
+        ),
+    )
 
 
 class GlobalValidationOutput(BaseModel):
@@ -96,6 +124,8 @@ Rules:
 - Produce concrete, testable success criteria (counts, required columns, constraints).
 - Partition the request across contacts when it improves completeness/verification.
 - Keep the plan minimal and actionable for email communication.
+- If the user mentions timing instructions for reminders (e.g., "remind every 2 hours", "wait 2 minutes then resend"),
+  extract them into reminder_policy. If no reminder instructions are present, set reminder_policy to null.
 Return ONLY valid JSON per the requested schema."""
 
     GLOBAL_VALIDATE_SYSTEM = """You are a strict validation assistant.

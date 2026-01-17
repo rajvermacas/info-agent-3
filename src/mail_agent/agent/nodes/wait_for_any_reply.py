@@ -13,7 +13,7 @@ from typing import Any, Optional
 from langgraph.errors import GraphInterrupt
 from langgraph.types import interrupt
 
-from mail_agent.agent.state import AgentState, get_conversation, update_conversation
+from mail_agent.agent.state import AgentState, get_conversation, get_request_context, update_conversation
 from mail_agent.agent.nodes.wait_for_reply import is_a2a_mode, get_webhook_server
 
 
@@ -26,6 +26,51 @@ def _find_matching_poc(state: AgentState, from_address: str) -> Optional[str]:
         if poc_email.lower() == from_lower:
             return poc_email
     return None
+
+
+def _reminder_subject_for_poc(state: AgentState, poc_email: str) -> str:
+    conversation = get_conversation(state, poc_email)
+    if conversation.sent_emails:
+        subject = conversation.sent_emails[-1].subject
+    else:
+        subject = "Information Request"
+    return subject if subject.lower().startswith("re:") else f"Re: {subject}"
+
+
+def _reminder_body_for_poc(state: AgentState, poc_email: str) -> str:
+    request_description, success_criteria, expected_format = get_request_context(state, poc_email)
+    parts = [
+        "Dear Sir/Madam,",
+        "",
+        "This is a gentle reminder regarding my earlier request.",
+    ]
+    if request_description:
+        parts.append(f"Request: {request_description}")
+    if expected_format:
+        parts.append(f"Expected format: {expected_format}")
+    if success_criteria:
+        parts.append(f"Success criteria: {success_criteria}")
+    parts.extend(
+        [
+            "",
+            "Please reply to the previous email with the requested information.",
+            "",
+            "Best regards,",
+            "info-agent",
+        ]
+    )
+    return "\n".join(parts)
+
+
+def _build_reminder_targets(state: AgentState, waiting_pocs: list[str]) -> dict[str, Any]:
+    targets: dict[str, Any] = {}
+    for poc in waiting_pocs:
+        targets[poc] = {
+            "to_addresses": [poc],
+            "subject": _reminder_subject_for_poc(state, poc),
+            "body_text": _reminder_body_for_poc(state, poc),
+        }
+    return targets
 
 
 async def wait_for_any_reply(state: AgentState) -> dict[str, Any]:
@@ -48,6 +93,8 @@ async def wait_for_any_reply(state: AgentState) -> dict[str, Any]:
 
     try:
         if is_a2a_mode():
+            reminder_policy = state.get("reminder_policy") or {}
+            reminder_targets = _build_reminder_targets(state, waiting_pocs)
             resume_data = interrupt(
                 {
                     "reason": "waiting_for_any_reply",
@@ -55,6 +102,9 @@ async def wait_for_any_reply(state: AgentState) -> dict[str, Any]:
                     "poc_emails": waiting_pocs,
                     "routing_key": f"task:{task_id}",
                     "poc_email": waiting_pocs[0],
+                    "reminder_policy": reminder_policy,
+                    "reminder_targets": reminder_targets,
+                    "reminder_state": {"sent_counts": {}, "last_sent_at": {}},
                 }
             )
             email_id = resume_data.get("email_id")
@@ -95,4 +145,3 @@ async def wait_for_any_reply(state: AgentState) -> dict[str, Any]:
             "current_node": "error",
             "progress_messages": [f"ERROR: {error_msg}"],
         }
-
