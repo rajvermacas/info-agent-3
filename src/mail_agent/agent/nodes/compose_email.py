@@ -19,6 +19,7 @@ from mail_agent.agent.state import (
 from mail_agent.config import get_settings
 from mail_agent.llm.client import LLMClient
 from mail_agent.llm.prompts import ComposedEmail, FollowUpEmail, PromptTemplates
+from mail_agent.agent.utils.placeholder_resolution import resolve_city_placeholders
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,21 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
             success_criteria = parsed_request.success_criteria
         if not expected_format:
             expected_format = parsed_request.expected_format
+
+        request_description, success_criteria, resolved_items = resolve_city_placeholders(
+            state,
+            current_poc=current_poc,
+            request_description=request_description,
+            success_criteria=success_criteria,
+        )
+
+        updated_contexts = dict(state.get("poc_request_contexts") or {})
+        if current_poc in updated_contexts and resolved_items:
+            updated_contexts[current_poc] = {
+                **updated_contexts[current_poc],
+                "request_description": request_description,
+                "success_criteria": success_criteria,
+            }
 
         # Update status
         conversation.status = "composing"
@@ -165,6 +181,7 @@ async def compose_email(state: AgentState) -> dict[str, Any]:
             "conversations": update_conversation(state, current_poc, conversation),
             "current_node": "compose_email",
             "progress_messages": [progress_msg],
+            "poc_request_contexts": updated_contexts if updated_contexts else None,
             # Store composed email for send_email node
             "_composed_subject": composed.subject,
             "_composed_body": composed.body,

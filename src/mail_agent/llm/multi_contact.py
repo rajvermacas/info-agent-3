@@ -119,6 +119,8 @@ Rules:
 - Use ONLY the email addresses present in the user's request.
 - Identify whether an email address is a DATA SOURCE (we must ask them for data) or a DELIVERY RECIPIENT (they should receive the final combined result).
 - Never request data from delivery recipients. Delivery recipients are usually referenced with phrases like "send it to X", "once done send to X", or "forward the final result to X".
+- If a later email depends on information returned by an earlier email, reflect that dependency clearly in agent_plan_steps (e.g., "Wait for Raj's reply, extract the two city names, then email Neha using those exact city names").
+- When encoding dependent values inside request_description/success_criteria, use ONLY these placeholders (never bracketed): CITY_1, CITY_2 (or "city 1", "city 2"). Do NOT use placeholders like [City 1], [City 2].
 - If the user provides an "Expected execution plan", follow it closely unless it contradicts the request.
 - If the request is ambiguous, make reasonable assumptions and list them explicitly.
 - Produce concrete, testable success criteria (counts, required columns, constraints).

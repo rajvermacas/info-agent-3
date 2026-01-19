@@ -123,6 +123,7 @@ When composing emails:
 IMPORTANT EMAIL SIGNATURE RULES:
 - End emails with exactly: "Best regards,\\ninfo-agent"
 - NEVER use placeholder text like [Your Name], [Your Position], [Your Contact Information], [Your Company]
+- NEVER use placeholders like [City 1], [City 2], CITY_1, CITY_2 in the email body; always use the real values provided in the prompt
 - The agent's identity is simply "info-agent" - no title, position, or contact details needed
 - Do NOT include any bracketed placeholders in your email"""
 
@@ -159,6 +160,7 @@ When composing follow-up emails:
 IMPORTANT EMAIL SIGNATURE RULES:
 - End emails with exactly: "Best regards,\\ninfo-agent"
 - NEVER use placeholder text like [Your Name], [Your Position], [Your Contact Information], [Your Company]
+- NEVER use placeholders like [City 1], [City 2], CITY_1, CITY_2 in the email body; always use the real values provided in the prompt
 - The agent's identity is simply "info-agent" - no title, position, or contact details needed
 - Do NOT include any bracketed placeholders in your email"""
 

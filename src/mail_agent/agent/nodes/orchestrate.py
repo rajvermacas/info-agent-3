@@ -10,7 +10,11 @@ This node enables:
 import logging
 from typing import Any, Optional
 
-from mail_agent.agent.state import AgentState, get_active_poc
+from mail_agent.agent.state import AgentState, get_active_poc, get_request_context
+from mail_agent.agent.utils.placeholder_resolution import (
+    can_resolve_city_pair,
+    needs_city_pair_placeholders,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -31,9 +35,19 @@ def _all_success(state: AgentState) -> bool:
 
 
 def _next_poc_to_email(state: AgentState) -> Optional[str]:
+    conversations = state.get("conversations") or {}
+    multi_contact = len(conversations) > 1
     for poc_email, conv in (state.get("conversations") or {}).items():
-        if conv.get("status") == "pending":
-            return poc_email
+        if conv.get("status") != "pending":
+            continue
+
+        request_description, success_criteria, _expected_format = get_request_context(
+            state, poc_email
+        )
+        if needs_city_pair_placeholders(f"{request_description}\n{success_criteria}"):
+            if multi_contact and not can_resolve_city_pair(state, exclude_poc=poc_email):
+                continue
+        return poc_email
     return None
 
 

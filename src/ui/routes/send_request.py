@@ -115,13 +115,15 @@ async def submit_plan_decision(
             decision=decision,
             feedback=feedback,
         )
+        if decision.strip().lower() == "reject":
+            return resources.templates.TemplateResponse(
+                "partials/task_plan_pending.html",
+                {"request": request, "task_id": task_id, "task": None},
+            )
+
         return resources.templates.TemplateResponse(
             "partials/task_plan_decision_submitted.html",
-            {
-                "request": request,
-                "task_id": task_id,
-                "decision": decision,
-            },
+            {"request": request, "task_id": task_id, "decision": decision},
         )
     except A2AClientError as e:
         return resources.templates.TemplateResponse(

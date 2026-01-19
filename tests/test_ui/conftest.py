@@ -17,6 +17,8 @@ from ui.services.smtp_client import (
     Email,
     Attachment,
 )
+from ui.services.smtp_sender import SMTPSenderService
+from ui.services.sse_client import SSEClientService
 
 
 @pytest.fixture
@@ -166,10 +168,14 @@ def test_client(
     templates = Jinja2Templates(env=env)
 
     # Create resources
+    smtp_sender = AsyncMock(spec=SMTPSenderService)
+    sse_client = AsyncMock(spec=SSEClientService)
     resources = UIServerResources(
         settings=settings,
         a2a_client=mock_a2a_client,
         smtp_client=mock_smtp_client,
+        smtp_sender=smtp_sender,
+        sse_client=sse_client,
         templates=templates,
     )
 

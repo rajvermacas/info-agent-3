@@ -192,3 +192,15 @@ How do you prevent prompt-injection via email replies/attachments  - THis is a p
 Should users be able to manually override validation and “accept anyway” for edge cases? - No
 
 Do you need idempotency/deduplication for duplicate webhooks - Since it is a poc. I am not worried about it right now.
+-----------------------------------------------
+For the below request:
+Ask for 2 city names from raj@gmail.com, upon reciving the response from raj, ask neha@gmail.com about some local foods available in those cities.
+------------
+
+raj replies with 2 city names mumbai and delhi.
+the agent sends the mail to neha@gmail.com asking for local foods available in city 1 and city 2. But it should ask neha about local foods avaialble in mumbai and delhi. It seems the agent doesn't extract the city names and use it to prepare the mail to be sent to neha@gmail.com
+
+---------------
+There is another issue:
+After rejecting a plan on the UI and submitting a feedback the UI doesn't show the regenerated plan.
+-----------------------------------------------
