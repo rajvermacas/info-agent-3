@@ -92,6 +92,20 @@ for subdir in agents commands output-styles skills; do
     log "✓ Created: $FULL_PATH"
 done
 
+# Codex directories
+log "Creating Codex directories..."
+TARGET_DIR="$TARGET_HOME/.codex"
+log "Main Codex directory: $TARGET_DIR"
+mkdir -p "$TARGET_DIR"
+log "Created: $TARGET_DIR"
+
+for subdir in commands skills; do
+    FULL_PATH="$TARGET_DIR/$subdir"
+    log "Creating subdirectory: $FULL_PATH"
+    mkdir -p "$FULL_PATH"
+    log "✓ Created: $FULL_PATH"
+done
+
 # Gemini directories
 log "Creating Gemini directories..."
 TARGET_DIR="$TARGET_HOME/.gemini/commands"
@@ -303,6 +317,65 @@ if [ "$REPO_AVAILABLE" = true ]; then
         log "⚠ No skills directory found at: $SOURCE_DIR"
     fi
 
+    # Copy Codex configuration files
+    log ""
+    log "Processing Codex configuration..."
+    if [ -d "$TEMP_DIR/.codex" ]; then
+        log "Found Codex directory"
+
+        # AGENTS.md
+        SOURCE_FILE="$TEMP_DIR/.codex/AGENTS.md"
+        TARGET_FILE="$TARGET_HOME/.codex/AGENTS.md"
+        if [ -f "$SOURCE_FILE" ]; then
+            log_file_op "COPY" "$SOURCE_FILE" "$TARGET_FILE"
+            cp "$SOURCE_FILE" "$TARGET_FILE"
+            log "✓ Copied AGENTS.md"
+        else
+            log "AGENTS.md not found at: $SOURCE_FILE"
+        fi
+
+        # Codex commands
+        log ""
+        log "Processing Codex commands..."
+        SOURCE_DIR="$TEMP_DIR/.codex/commands"
+        TARGET_DIR="$TARGET_HOME/.codex/commands"
+        if [ -d "$SOURCE_DIR" ]; then
+            log "Found Codex commands directory at: $SOURCE_DIR"
+            log "Listing command files to copy:"
+            for file in "$SOURCE_DIR"/*; do
+                if [ -f "$file" ]; then
+                    filename=$(basename "$file")
+                    log "  - $filename"
+                    log_file_op "COPY" "$file" "$TARGET_DIR/$filename"
+                    cp "$file" "$TARGET_DIR/" 2>/dev/null || log "    Warning: Failed to copy $filename"
+                fi
+            done
+            log "✓ Copied Codex commands"
+        else
+            log "No Codex commands directory found at: $SOURCE_DIR"
+        fi
+
+        # Codex skills
+        log ""
+        log "Processing Codex skills..."
+        SOURCE_DIR="$TEMP_DIR/.codex/skills"
+        TARGET_DIR="$TARGET_HOME/.codex/skills"
+        if [ -d "$SOURCE_DIR" ]; then
+            log "Found Codex skills directory at: $SOURCE_DIR"
+            # Enable dotglob to include hidden files in glob expansion
+            shopt -s dotglob
+            cp -r "$SOURCE_DIR"/* "$TARGET_DIR/" 2>/dev/null || true
+            shopt -u dotglob
+            log "✓ Copied Codex skills directory"
+        else
+            log "No Codex skills directory found at: $SOURCE_DIR"
+        fi
+
+        log "✓ Copied Codex config"
+    else
+        log "No Codex directory found at: $TEMP_DIR/.codex"
+    fi
+
     log "File copy operations completed"
 else
     log ""
@@ -349,6 +422,13 @@ fi
 log ""
 log "=== STEP 4: Installing Utility Packages ==="
 log "Preparing package installation..."
+
+# Remove problematic yarn repository if it exists (added by node feature but has expired GPG key)
+if [ -f /etc/apt/sources.list.d/yarn.list ]; then
+    log "Removing yarn repository (not needed, has expired GPG key)..."
+    rm -f /etc/apt/sources.list.d/yarn.list
+    log "✓ Removed yarn.list"
+fi
 
 # Essential packages only
 PACKAGES=(
@@ -481,90 +561,6 @@ else
     log "⚠ pip3 not found, cannot install PyYAML"
 fi
 
-# Install MCP servers
-log ""
-log "=== STEP 4.6: Installing MCP Servers ==="
-log "Installing Claude MCP servers..."
-
-# Refresh PATH and hash table to ensure newly installed commands are found
-export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
-hash -r  # Clear the command hash table
-
-# Try to find claude with multiple methods
-CLAUDE_FOUND=false
-CLAUDE_CMD=""
-
-# Method 1: Direct command check after PATH refresh
-if command -v claude &> /dev/null; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="claude"
-    log "Claude CLI found via command -v: $(which claude)"
-# Method 2: Check common npm global install locations
-elif [ -x "/usr/bin/claude" ]; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="/usr/bin/claude"
-    log "Claude CLI found at /usr/bin/claude"
-elif [ -x "/usr/local/bin/claude" ]; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="/usr/local/bin/claude"
-    log "Claude CLI found at /usr/local/bin/claude"
-# Method 3: Check if the npm module exists and try to use it directly
-elif [ -f "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js" ]; then
-    CLAUDE_FOUND=true
-    CLAUDE_CMD="node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-    log "Claude CLI found via node module at /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-else
-    # Last resort: wait a bit and try again
-    log "Claude not immediately found, waiting 3 seconds for environment to settle..."
-    sleep 3
-    hash -r  # Clear the command hash table
-
-    # Try one more time after wait
-    if command -v claude &> /dev/null; then
-        CLAUDE_FOUND=true
-        CLAUDE_CMD="claude"
-        log "Claude CLI found after wait: $(which claude)"
-    elif [ -f "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js" ]; then
-        CLAUDE_FOUND=true
-        CLAUDE_CMD="node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-        log "Claude npm module found after wait"
-    fi
-fi
-
-if [ "$CLAUDE_FOUND" = true ]; then
-    log "Claude CLI detected, proceeding with MCP server installation"
-    log "Using claude command: $CLAUDE_CMD"
-
-    # Install context7 MCP server
-    log "Installing context7 MCP server..."
-    log "Command: $CLAUDE_CMD mcp add context7 -s user -- npx -y @upstash/context7-mcp"
-    if $CLAUDE_CMD mcp add context7 -s user -- npx -y @upstash/context7-mcp 2>&1 | while IFS= read -r line; do log "    MCP: $line"; done; [ ${PIPESTATUS[0]} -eq 0 ]; then
-        log "  ✓ Successfully installed context7 MCP server"
-    else
-        log "  ✗ Failed to install context7 MCP server"
-    fi
-
-    # Install fetch MCP server
-    log "Installing fetch MCP server..."
-    log "Command: $CLAUDE_CMD mcp add fetch -s user -- uvx mcp-server-fetch"
-    if $CLAUDE_CMD mcp add fetch -s user -- uvx mcp-server-fetch 2>&1 | while IFS= read -r line; do log "    MCP: $line"; done; [ ${PIPESTATUS[0]} -eq 0 ]; then
-        log "  ✓ Successfully installed fetch MCP server"
-    else
-        log "  ✗ Failed to install fetch MCP server"
-    fi
-
-    log "✓ MCP server installation phase completed"
-else
-    log "Claude CLI not found after all attempts"
-    log "⚠ Claude CLI not available - MCP servers not installed"
-    log "PATH checked: $PATH"
-    log "Locations checked:"
-    log "  - command -v claude"
-    log "  - /usr/bin/claude"
-    log "  - /usr/local/bin/claude"
-    log "  - /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
-fi
-
 # Clean up
 log ""
 log "=== STEP 5: Cleanup ==="
@@ -599,6 +595,11 @@ log "    - Skills: ~/.claude/skills/"
 log "    - Settings: ~/.claude/settings.json"
 log "    - Configuration: ~/.claude/CLAUDE.md"
 log ""
+log "  • Codex configuration: ~/.codex/"
+log "    - Commands: ~/.codex/commands/"
+log "    - Skills: ~/.codex/skills/"
+log "    - Configuration: ~/.codex/AGENTS.md"
+log ""
 log "  • Gemini configuration: ~/.gemini/"
 log "    - Commands: ~/.gemini/commands/"
 log "    - Configuration: ~/.gemini/GEMINI.md"
@@ -606,14 +607,6 @@ log ""
 log "  • Project templates: ~/projects/claude-code-templates/"
 log ""
 log "  • VSCode settings: ~/User/"
-log ""
-log "  • MCP Servers:"
-if [ "$CLAUDE_FOUND" = true ]; then
-    log "    - context7 MCP server: Provides library documentation access"
-    log "    - fetch MCP server: Enables web content fetching"
-else
-    log "    - MCP servers not installed (Claude CLI not available)"
-fi
 log ""
 log "Statistics:"
 log "  • Packages installed: $INSTALLED_COUNT"
