@@ -390,6 +390,78 @@ class SMTPClientService:
             logger.error("Unexpected error deleting email: %s", e)
             raise SMTPConnectionError(f"Unexpected error: {e}") from e
 
+    def _parse_deleted_count(self, response_data: object) -> int:
+        """
+        Parse and validate deleted count from clear-all response.
+
+        Args:
+            response_data: Raw JSON payload from clear-all endpoint.
+
+        Returns:
+            Number of deleted emails.
+
+        Raises:
+            SMTPConnectionError: If payload is invalid.
+        """
+        if not isinstance(response_data, dict):
+            raise SMTPConnectionError(
+                "Invalid clear-all response: expected JSON object payload"
+            )
+
+        if "deleted_count" not in response_data:
+            raise SMTPConnectionError(
+                "Invalid clear-all response: missing required field 'deleted_count'"
+            )
+
+        deleted_count = response_data["deleted_count"]
+        if not isinstance(deleted_count, int):
+            raise SMTPConnectionError(
+                "Invalid clear-all response: 'deleted_count' must be an integer"
+            )
+
+        return deleted_count
+
+    async def clear_all_inboxes(self) -> int:
+        """
+        Clear all inboxes and emails.
+
+        Returns:
+            Total number of deleted emails.
+
+        Raises:
+            SMTPConnectionError: If request fails or response is invalid.
+        """
+        logger.warning("Clearing all inboxes via Mock SMTP API")
+        client = await self._get_client()
+
+        try:
+            response = await client.delete("/api/clear")
+            logger.info(
+                "Received clear-all response with status_code=%d",
+                response.status_code,
+            )
+            response.raise_for_status()
+
+            response_data = response.json()
+            deleted_count = self._parse_deleted_count(response_data)
+
+            logger.warning(
+                "Successfully cleared all inboxes; deleted_count=%d",
+                deleted_count,
+            )
+            return deleted_count
+        except httpx.HTTPStatusError as e:
+            logger.error("HTTP error clearing all inboxes: %s", e)
+            raise SMTPConnectionError(f"HTTP error: {e.response.status_code}") from e
+        except ValueError as e:
+            logger.error("Invalid JSON response while clearing all inboxes: %s", e)
+            raise SMTPConnectionError("Invalid JSON response from /api/clear") from e
+        except SMTPConnectionError:
+            raise
+        except Exception as e:
+            logger.error("Unexpected error clearing all inboxes: %s", e)
+            raise SMTPConnectionError(f"Unexpected error: {e}") from e
+
     async def check_health(self) -> bool:
         """
         Check if SMTP server is healthy.

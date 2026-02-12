@@ -56,6 +56,42 @@ async def list_inboxes(request: Request) -> HTMLResponse:
         )
 
 
+@router.delete("/clear-all", response_class=HTMLResponse)
+async def clear_all_inboxes(request: Request) -> HTMLResponse:
+    """
+    Clear all inboxes and emails.
+
+    Returns HTML partial with operation result.
+    """
+    logger.warning("Received request to clear all inboxes")
+    resources = get_resources()
+
+    try:
+        deleted_count = await resources.smtp_client.clear_all_inboxes()
+        logger.warning(
+            "Clear-all operation completed successfully; deleted_count=%d",
+            deleted_count,
+        )
+        return resources.templates.TemplateResponse(
+            "partials/inbox_clear_result.html",
+            {
+                "request": request,
+                "success": True,
+                "deleted_count": deleted_count,
+            },
+        )
+    except SMTPClientError as e:
+        logger.error("SMTP error clearing all inboxes: %s", e)
+        return resources.templates.TemplateResponse(
+            "partials/error.html",
+            {
+                "request": request,
+                "error": str(e),
+                "title": "Failed to Clear Inboxes",
+            },
+        )
+
+
 @router.get("/{email_address}/emails", response_class=HTMLResponse)
 async def list_emails(request: Request, email_address: str) -> HTMLResponse:
     """

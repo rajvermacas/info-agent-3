@@ -17,6 +17,8 @@ from ui.services.smtp_client import (
     Email,
     Attachment,
 )
+from ui.services.smtp_sender import SMTPSenderService
+from ui.services.sse_client import SSEClientService
 
 
 @pytest.fixture
@@ -144,10 +146,29 @@ def mock_smtp_client() -> AsyncMock:
 
 
 @pytest.fixture
+def mock_smtp_sender() -> AsyncMock:
+    """Create a mock SMTP sender service."""
+    client = AsyncMock(spec=SMTPSenderService)
+    client.send_email = AsyncMock()
+    client.check_health = AsyncMock(return_value=True)
+    return client
+
+
+@pytest.fixture
+def mock_sse_client() -> AsyncMock:
+    """Create a mock SSE client service."""
+    client = AsyncMock(spec=SSEClientService)
+    client.get_progress_events = AsyncMock(return_value=[])
+    return client
+
+
+@pytest.fixture
 def test_client(
     settings: Settings,
     mock_a2a_client: AsyncMock,
     mock_smtp_client: AsyncMock,
+    mock_smtp_sender: AsyncMock,
+    mock_sse_client: AsyncMock,
 ) -> TestClient:
     """Create a test client with mocked dependencies."""
     import jinja2
@@ -170,6 +191,8 @@ def test_client(
         settings=settings,
         a2a_client=mock_a2a_client,
         smtp_client=mock_smtp_client,
+        smtp_sender=mock_smtp_sender,
+        sse_client=mock_sse_client,
         templates=templates,
     )
 

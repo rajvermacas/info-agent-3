@@ -577,6 +577,78 @@ class TestSMTPClientService:
             await client.close()
 
     @pytest.mark.asyncio
+    async def test_clear_all_inboxes_success(self, settings: Settings) -> None:
+        """Test successful clear-all request."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "message": "Cleared all inboxes",
+            "deleted_count": 8,
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.delete = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = SMTPClientService(settings)
+            deleted_count = await client.clear_all_inboxes()
+
+            assert deleted_count == 8
+            mock_client.delete.assert_awaited_once_with("/api/clear")
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_clear_all_inboxes_http_error(self, settings: Settings) -> None:
+        """Test clear-all HTTP status failure."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "Server Error",
+                request=MagicMock(),
+                response=mock_response,
+            )
+        )
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.delete = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = SMTPClientService(settings)
+
+            with pytest.raises(SMTPConnectionError, match="HTTP error"):
+                await client.clear_all_inboxes()
+
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_clear_all_inboxes_missing_deleted_count(self, settings: Settings) -> None:
+        """Test clear-all response validation when deleted_count is missing."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"message": "Cleared all inboxes"}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.delete = AsyncMock(return_value=mock_response)
+            mock_client.aclose = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            client = SMTPClientService(settings)
+
+            with pytest.raises(SMTPConnectionError, match="deleted_count"):
+                await client.clear_all_inboxes()
+
+            await client.close()
+
+    @pytest.mark.asyncio
     async def test_check_health_success(self, settings: Settings) -> None:
         """Test health check success."""
         mock_response = MagicMock()

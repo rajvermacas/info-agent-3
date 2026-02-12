@@ -31,7 +31,21 @@
                         </button>
                     </div>
                 </div>
-                <div class="ml-4 self-end">
+                <div class="ml-4 self-end flex items-center space-x-2">
+                    <button
+                        type="button"
+                        hx-delete="/api/inbox/clear-all"
+                        hx-target="#inbox-action-status"
+                        hx-swap="innerHTML"
+                        hx-disabled-elt="this"
+                        hx-on::after-request="if (event.detail.successful) { refreshAfterClearAll(); }"
+                        class="inline-flex items-center px-3 py-2 border border-red-300 shadow-sm text-sm leading-4 font-medium rounded-md text-red-700 bg-red-50 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                    >
+                        <svg class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 7.5h12m-1.5 0v10.125A2.625 2.625 0 0113.875 20.25h-3.75A2.625 2.625 0 017.5 17.625V7.5m3 0V6A1.5 1.5 0 0112 4.5h0A1.5 1.5 0 0113.5 6v1.5" />
+                        </svg>
+                        Clear All Inboxes
+                    </button>
                     <button
                         type="button"
                         hx-get="/api/inbox/list"
@@ -46,6 +60,7 @@
                     </button>
                 </div>
             </div>
+            <div id="inbox-action-status" class="mt-4"></div>
         </div>
     </div>
 
@@ -98,6 +113,24 @@ function loadInbox() {
     if (email) {
         htmx.ajax('GET', '/api/inbox/' + encodeURIComponent(email) + '/emails', '#email-list-container');
     }
+}
+
+function refreshAfterClearAll() {
+    const email = document.getElementById('inbox-select').value;
+    if (!email) {
+        throw new Error('inbox-select value is required to refresh email list after clear-all');
+    }
+
+    htmx.ajax('GET', '/api/inbox/list', '#inbox-list-container');
+    htmx.ajax('GET', '/api/inbox/' + encodeURIComponent(email) + '/emails', '#email-list-container');
+
+    const detailContainer = document.getElementById('email-detail-container');
+    detailContainer.classList.add('hidden');
+    detailContainer.innerHTML = '';
+
+    const replyContainer = document.getElementById('reply-form-container');
+    replyContainer.classList.add('hidden');
+    replyContainer.innerHTML = '';
 }
 
 function showEmailDetail(inboxAddress, emailId) {

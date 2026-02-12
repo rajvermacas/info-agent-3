@@ -90,6 +90,7 @@ class TestUIRouterConfiguration:
         assert any("/list" in p for p in route_paths)
         assert any("/emails" in p for p in route_paths)
         assert any("/send-reply" in p for p in route_paths)
+        assert any("/clear-all" in p for p in route_paths)
 
     def test_dashboard_router_has_routes(self) -> None:
         """Test that dashboard router has expected routes."""
